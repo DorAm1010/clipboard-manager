@@ -1,0 +1,36 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Compiled binaries
+clipboard-manager
+clipboard-manager.exe
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.dylib
+*.so
+
+# macOS
+.DS_Store
+*.dSYM/
+
+# Windows
+Thumbs.db
+
+# VS Code (keep workspace config, ignore per-user files)
+.vscode/c_cpp_properties.json
+
+# CLion
+.idea/
