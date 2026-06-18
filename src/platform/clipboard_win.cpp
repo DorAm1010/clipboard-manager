@@ -1,47 +1,106 @@
-// clipboard_win.cpp  –  Windows implementation using the Win32 API
+/**
+ * @file clipboard_win.cpp
+ * @brief Windows clipboard reader using the Win32 API.
+ *
+ * Compiled only on Windows (guarded by `#ifdef _WIN32`). The CMake build
+ * system also only adds this file to the source list on Windows, but the
+ * preprocessor guard provides a second layer of safety.
+ *
+ * Win32 clipboard access is a three-step lock protocol:
+ *   1. OpenClipboard()    — acquire exclusive access to the clipboard.
+ *   2. GetClipboardData() — get a handle to the requested data format.
+ *   3. GlobalLock()       — get a raw pointer to the clipboard memory block.
+ *   ... read the data ...
+ *   4. GlobalUnlock()     — release the memory pin.
+ *   5. CloseClipboard()   — release the clipboard so other apps can use it.
+ *
+ * We must call CloseClipboard() on every code path — including error returns —
+ * otherwise other processes cannot access the clipboard until our process exits.
+ */
 
 #ifdef _WIN32
 
 #include "ClipboardManager.h"
 
+// WIN32_LEAN_AND_MEAN strips rarely-used headers from windows.h, reducing
+// compile time and avoiding macro collisions with standard C++ names.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+/**
+ * @brief Read the current plain-text content of the Windows clipboard.
+ *
+ * Windows stores clipboard text in UTF-16 (wide characters, `wchar_t`).
+ * We convert to UTF-8 (`std::string`) using WideCharToMultiByte so the
+ * rest of the program can work with a single string type everywhere.
+ *
+ * WideCharToMultiByte is called twice:
+ *   - First call (with nullptr output buffer): measures how many UTF-8
+ *     bytes the conversion will produce.
+ *   - Second call (with a sized output buffer): performs the actual conversion.
+ * This two-pass pattern is idiomatic Win32 for size-unknown conversions.
+ *
+ * @return The clipboard text as a UTF-8 std::string, or an empty string if
+ *         the clipboard holds no text or cannot be opened.
+ */
 std::string ClipboardManager::readClipboard()
 {
-    // OpenClipboard(nullptr) opens the clipboard for examination.
-    // Pass nullptr (no window handle) since we are a console/background app.
+    // Acquire exclusive access to the clipboard.
+    // We pass nullptr for the window handle because we are a console app
+    // with no HWND. Only one process can have the clipboard open at a time;
+    // if another app currently holds it, OpenClipboard() returns FALSE.
     if (!OpenClipboard(nullptr)) {
         return {};
     }
 
-    // CF_UNICODETEXT is the standard format for Unicode text on Windows.
+    // Request the Unicode text format. CF_UNICODETEXT is the standard Win32
+    // clipboard format for UTF-16 encoded text. Returns nullptr if no text
+    // is currently on the clipboard (e.g., an image was copied).
     HANDLE hData = GetClipboardData(CF_UNICODETEXT);
     if (hData == nullptr) {
-        CloseClipboard();
+        CloseClipboard();   // always release before returning
         return {};
     }
 
-    // GlobalLock gives us a raw pointer into the clipboard memory block.
-    // We must call GlobalUnlock when done.
+    // GlobalLock() pins the global memory block in place and returns a typed
+    // pointer to its contents. The block is owned by the clipboard — we must
+    // not free it. GlobalUnlock() releases the pin when we are done reading.
     wchar_t* pText = static_cast<wchar_t*>(GlobalLock(hData));
     if (pText == nullptr) {
         CloseClipboard();
         return {};
     }
 
-    // Convert wide string (UTF-16) to a UTF-8 std::string.
+    // ── UTF-16 → UTF-8 conversion ─────────────────────────────────────────
+    // Pass 1: compute the required buffer size (in bytes, including the null
+    // terminator). Passing -1 as the source length tells the function to
+    // measure up to (and including) the null terminator automatically.
     int sizeNeeded = WideCharToMultiByte(
-        CP_UTF8, 0, pText, -1,
-        nullptr, 0, nullptr, nullptr);
+        CP_UTF8,    // target code page: UTF-8
+        0,          // no special flags
+        pText,      // source wide string
+        -1,         // source length: auto-detect via null terminator
+        nullptr,    // output buffer: nullptr → just measure
+        0,          // output buffer size: 0 → just measure
+        nullptr,    // default char (not used for UTF-8)
+        nullptr);   // used default char flag (not used for UTF-8)
 
-    std::string result(sizeNeeded - 1, '\0');   // -1 to exclude null terminator
+    // Allocate the result string and fill it.
+    // sizeNeeded includes the null terminator; std::string manages its own
+    // null terminator internally, so we subtract 1 to avoid a trailing '\0'
+    // inside the string's character sequence.
+    std::string result(sizeNeeded - 1, '\0');
+
+    // Pass 2: perform the actual conversion into our pre-sized buffer.
     WideCharToMultiByte(
         CP_UTF8, 0, pText, -1,
-        result.data(), sizeNeeded, nullptr, nullptr);
+        result.data(),  // write directly into std::string's buffer (C++17)
+        sizeNeeded,
+        nullptr, nullptr);
 
-    GlobalUnlock(hData);
-    CloseClipboard();
+    // Release resources in reverse acquisition order.
+    GlobalUnlock(hData);    // unpin the global memory block
+    CloseClipboard();       // release the clipboard for other processes
 
     return result;
 }
