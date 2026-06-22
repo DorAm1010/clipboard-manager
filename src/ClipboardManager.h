@@ -1,9 +1,12 @@
 #pragma once
 
+#include <atomic>
 #include <string>
-#include <vector>
 #include <functional>
 #include <chrono>
+#include <mutex>
+#include <deque>
+#include <vector>
 
 // ─── ClipboardEntry ───────────────────────────────────────────────────────────
 
@@ -11,13 +14,14 @@
  * @brief A single snapshot of clipboard text captured at a point in time.
  *
  * Every time the clipboard changes to new text, one ClipboardEntry is created
- * and appended to ClipboardManager's internal history vector.
+ * and appended to ClipboardManager's internal history deque.
  *
  * Design note: this is a plain data struct (no private members, no invariants
  * to protect), so we use `struct` rather than `class` as a signal to readers
  * that it is just a bundle of values.
  */
-struct ClipboardEntry {
+struct ClipboardEntry
+{
     /// The raw text that was on the clipboard when this entry was captured.
     std::string content;
 
@@ -35,9 +39,9 @@ struct ClipboardEntry {
      *              avoid a second copy.
      */
     ClipboardEntry(std::string text)
-        : content(std::move(text))
-        , timestamp(std::chrono::system_clock::now())
-    {}
+        : content(std::move(text)), timestamp(std::chrono::system_clock::now())
+    {
+    }
 };
 
 // ─── ClipboardManager ─────────────────────────────────────────────────────────
@@ -64,14 +68,9 @@ struct ClipboardEntry {
  *   mgr.stop();
  *   t.join();
  * @endcode
- *
- * Thread safety: `stop()` and `history()` may be called from threads other
- * than the one running `start()`, but the current implementation uses a plain
- * `bool` flag rather than `std::atomic<bool>`, which is technically a data
- * race. A future improvement (see ROADMAP_AND_TASKS.md Task 1.1) should
- * replace the flag with `std::atomic<bool>`.
  */
-class ClipboardManager {
+class ClipboardManager
+{
 public:
     /**
      * @brief Type alias for the new-entry callback.
@@ -83,7 +82,7 @@ public:
      * This is the Observer pattern: the manager does not know or care what
      * the caller does with a new entry — it just calls whatever was registered.
      */
-    using NewEntryCallback = std::function<void(const ClipboardEntry&)>;
+    using NewEntryCallback = std::function<void(const ClipboardEntry &)>;
 
     /**
      * @brief Construct the manager with a history limit and poll interval.
@@ -94,12 +93,9 @@ public:
      * @param pollIntervalMs  How often (in milliseconds) to read the clipboard
      *                        and check for changes. Lower values feel more
      *                        responsive but consume more CPU. Defaults to 500.
-     *
-     * The constructor pre-allocates the history vector with `reserve()` so the
-     * first `maxHistory` insertions never trigger a heap reallocation.
      */
     explicit ClipboardManager(size_t maxHistory = 100,
-                               unsigned int pollIntervalMs = 500);
+                              unsigned int pollIntervalMs = 500);
 
     /**
      * @brief Destructor — ensures the polling loop is stopped before the
@@ -125,6 +121,28 @@ public:
      *            Moved into internal storage for efficiency.
      */
     void onNewEntry(NewEntryCallback cb);
+
+    /**
+     * @brief Search for entries containing the specified keyword.
+     *
+     * @param keyword  The string to search for.
+     * @return         A vector of matching ClipboardEntry objects.
+     */
+    std::vector<ClipboardEntry> search(const std::string &keyword) const;
+
+    /**
+     * @brief Save the current history to a file.
+     *
+     * @param path  The file path where the history should be saved.
+     */
+    void saveHistory(const std::string &path) const;
+
+    /**
+     * @brief Load history entries from a file, replacing the current history.
+     *
+     * @param path  The file path from which to load the history.
+     */
+    void loadHistory(const std::string &path);
 
     /**
      * @brief Start the clipboard polling loop. Blocks until `stop()` is called.
@@ -156,14 +174,14 @@ public:
      * modify `m_history`. This is safe as long as the caller does not outlive
      * the manager.
      *
-     * @return A vector of ClipboardEntry objects ordered from oldest to newest.
+     * @return A deque of ClipboardEntry objects ordered from oldest to newest.
      */
-    std::vector<ClipboardEntry> history() const;
+    std::deque<ClipboardEntry> history() const;
 
     /**
      * @brief Erase all stored history entries and reset the last-seen value.
      *
-     * After this call `history()` returns an empty vector and the manager
+     * After this call `history()` returns an empty deque and the manager
      * treats the next clipboard read as a genuinely new entry even if the
      * clipboard content has not changed.
      */
@@ -184,25 +202,30 @@ private:
      */
     std::string readClipboard();
 
+    /// Mutex to protect access to the history and last-seen values.
+    /// This is needed because `history()` and `clearHistory()` can be called
+    /// from any thread, while `start()` modifies these values on the polling thread.
+    mutable std::mutex m_mutex;
+
     /// Maximum number of history entries to keep before evicting the oldest.
-    size_t              m_maxHistory;
+    size_t m_maxHistory;
 
     /// Milliseconds to sleep between successive clipboard reads.
-    unsigned int        m_pollIntervalMs;
+    unsigned int m_pollIntervalMs;
 
     /// Polling loop control flag. Set to true by start(), false by stop().
     /// NOTE: accessed from two threads without synchronisation — a known
     /// limitation to be fixed with std::atomic<bool> (Task 1.1 in roadmap).
-    bool                m_running;
+    std::atomic<bool> m_running{false};
 
     /// The last clipboard text we acted on, used to detect changes.
     /// Storing this avoids firing the callback when the clipboard content
     /// is re-read but has not actually changed since the last poll.
-    std::string         m_lastSeen;
+    std::string m_lastSeen;
 
     /// Bounded history of captured clipboard entries, oldest first.
-    std::vector<ClipboardEntry> m_history;
+    std::deque<ClipboardEntry> m_history;
 
     /// Optional user-registered callback; empty (falsy) if not set.
-    NewEntryCallback    m_callback;
+    NewEntryCallback m_callback;
 };

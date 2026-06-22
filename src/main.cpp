@@ -1,4 +1,5 @@
 #include "ClipboardManager.h"
+#include "platform/paths.h"
 
 #include <iostream>
 #include <iomanip>
@@ -17,7 +18,7 @@
  * pointer is the standard way to bridge this gap. It is set once in main()
  * before any signals can arrive, so no synchronisation is needed.
  */
-static ClipboardManager* g_manager = nullptr;
+static ClipboardManager *g_manager = nullptr;
 
 /**
  * @brief Signal handler for SIGINT (Ctrl+C) and SIGTERM.
@@ -31,7 +32,8 @@ static ClipboardManager* g_manager = nullptr;
 void handleSignal(int /*signum*/)
 {
     std::cout << "\n[Signal] Shutting down...\n";
-    if (g_manager) {
+    if (g_manager)
+    {
         g_manager->stop();
     }
 }
@@ -52,15 +54,15 @@ void handleSignal(int /*signum*/)
  * @param tp  The time_point to format.
  * @return    A string such as "14:03:57".
  */
-std::string formatTime(const std::chrono::system_clock::time_point& tp)
+std::string formatTime(const std::chrono::system_clock::time_point &tp)
 {
     std::time_t t = std::chrono::system_clock::to_time_t(tp);
     std::tm tm{};
 
 #ifdef _WIN32
-    localtime_s(&tm, &t);   // Windows thread-safe variant (parameters reversed)
+    localtime_s(&tm, &t); // Windows thread-safe variant (parameters reversed)
 #else
-    localtime_r(&t, &tm);   // POSIX thread-safe variant
+    localtime_r(&t, &tm); // POSIX thread-safe variant
 #endif
 
     std::ostringstream oss;
@@ -79,9 +81,10 @@ std::string formatTime(const std::chrono::system_clock::time_point& tp)
  * @param maxLen  Maximum allowed length including the "..." suffix.
  * @return        The original string, or a truncated copy ending in "...".
  */
-std::string truncate(const std::string& s, size_t maxLen = 72)
+std::string truncate(const std::string &s, size_t maxLen = 72)
 {
-    if (s.size() <= maxLen) return s;
+    if (s.size() <= maxLen)
+        return s;
     return s.substr(0, maxLen - 3) + "...";
 }
 
@@ -94,19 +97,40 @@ std::string truncate(const std::string& s, size_t maxLen = 72)
  *
  * @param mgr  The ClipboardManager whose history to display.
  */
-void printHistory(const ClipboardManager& mgr)
+void printHistory(const ClipboardManager &mgr)
 {
     auto entries = mgr.history();
-    if (entries.empty()) {
+    if (entries.empty())
+    {
         std::cout << "(history is empty)\n";
         return;
     }
     std::cout << "\n── Clipboard History (" << entries.size() << " entries) ──\n";
-    for (size_t i = 0; i < entries.size(); ++i) {
+    for (size_t i = 0; i < entries.size(); ++i)
+    {
         std::cout << "  [" << (i + 1) << "] "
                   << formatTime(entries[i].timestamp)
                   << "  "
                   << truncate(entries[i].content)
+                  << "\n";
+    }
+    std::cout << "─────────────────────────────────────\n\n";
+}
+
+void printSearchResults(const std::vector<ClipboardEntry> &results, const std::string &keyword)
+{
+    if (results.empty())
+    {
+        std::cout << "No entries found containing \"" << keyword << "\".\n";
+        return;
+    }
+    std::cout << "\n── Search Results for \"" << keyword << "\" (" << results.size() << " entries) ──\n";
+    for (size_t i = 0; i < results.size(); ++i)
+    {
+        std::cout << "  [" << (i + 1) << "] "
+                  << formatTime(results[i].timestamp)
+                  << "  "
+                  << truncate(results[i].content)
                   << "\n";
     }
     std::cout << "─────────────────────────────────────\n\n";
@@ -140,36 +164,36 @@ int main()
     std::cout << "Commands (type and press Enter):\n";
     std::cout << "  h  – show history\n";
     std::cout << "  c  – clear history\n";
+    std::cout << "  s  – search history\n";
     std::cout << "  q  – quit\n\n";
 
     // Keep last 50 entries; check the clipboard every 500 ms.
     ClipboardManager manager(50, 500);
 
+    manager.loadHistory(getHistoryFilePath());
     // Expose the manager to the signal handler before registering signals,
     // so the handler is never called with a null pointer.
     g_manager = &manager;
 
     // Replace the default SIGINT / SIGTERM handlers with our clean-shutdown handler.
-    std::signal(SIGINT,  handleSignal);
+    std::signal(SIGINT, handleSignal);
     std::signal(SIGTERM, handleSignal);
 
     // Register an inline callback (lambda) that fires each time the clipboard
     // changes. The lambda captures nothing — it only uses its parameter.
     // std::flush forces the "> " prompt to appear immediately after the
     // notification line, even though std::cout is line-buffered by default.
-    manager.onNewEntry([](const ClipboardEntry& entry) {
-        std::cout << "[new] "
-                  << truncate(entry.content, 60)
-                  << "\n> " << std::flush;
-    });
+    manager.onNewEntry([](const ClipboardEntry &entry)
+                       { std::cout << "[new] "
+                                   << truncate(entry.content, 60)
+                                   << "\n> " << std::flush; });
 
     // Spin up a background thread that runs the blocking poll loop.
     // The lambda captures manager by reference ([&manager]) — the reference
     // stays valid because manager lives in main()'s stack frame for the
     // entire duration of monitorThread.
-    std::thread monitorThread([&manager]() {
-        manager.start();
-    });
+    std::thread monitorThread([&manager]()
+                              { manager.start(); });
 
     // ── Command loop ──────────────────────────────────────────────────────
     // std::getline blocks until the user presses Enter, then writes the
@@ -178,25 +202,44 @@ int main()
     std::string line;
     std::cout << "> " << std::flush;
 
-    while (std::getline(std::cin, line)) {
-        if (line == "q" || line == "quit") {
-            manager.stop();   // signal the background thread to exit
+    while (std::getline(std::cin, line))
+    {
+        if (line == "q" || line == "quit")
+        {
+            manager.stop(); // signal the background thread to exit
             break;
-        } else if (line == "h" || line == "history") {
+        }
+        else if (line == "h" || line == "history")
+        {
             printHistory(manager);
-        } else if (line == "c" || line == "clear") {
+        }
+        else if (line == "c" || line == "clear")
+        {
             manager.clearHistory();
             std::cout << "History cleared.\n";
-        } else if (!line.empty()) {
+        }
+        else if (line == "s" || line == "search")
+        {
+            std::cout << "Enter search keyword: ";
+            std::string keyword;
+            std::getline(std::cin, keyword);
+            auto results = manager.search(keyword);
+            printSearchResults(results, keyword);
+        }
+        else if (!line.empty())
+        {
             std::cout << "Unknown command. Use h, c, or q.\n";
         }
         std::cout << "> " << std::flush;
     }
 
+    manager.saveHistory(getHistoryFilePath());
+
     // join() blocks the main thread until monitorThread has returned from
     // manager.start(). This is mandatory: destroying a std::thread object
     // that is still joinable calls std::terminate(), crashing the program.
-    if (monitorThread.joinable()) {
+    if (monitorThread.joinable())
+    {
         monitorThread.join();
     }
 

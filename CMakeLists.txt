@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ClipboardManager VERSION 0.1.0 LANGUAGES CXX)
+project(ClipboardManager VERSION 0.1.0 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,12 +8,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(SOURCES
     src/main.cpp
     src/ClipboardManager.cpp
+    src/platform/paths.cpp
 )
 
 # ─── Platform-specific sources ───────────────────────────────────────────────
 if(APPLE)
     list(APPEND SOURCES src/platform/clipboard_mac.mm)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -x objective-c++")
 elseif(WIN32)
     list(APPEND SOURCES src/platform/clipboard_win.cpp)
 elseif(UNIX)
@@ -22,7 +22,7 @@ endif()
 
 add_executable(clipboard-manager ${SOURCES})
 
-target_include_directories(clipboard-manager PRIVATE src)
+target_include_directories(clipboard-manager PRIVATE src src/platform)
 
 # ─── Platform-specific linker flags ──────────────────────────────────────────
 if(APPLE)
@@ -44,3 +44,16 @@ if(MSVC)
 else()
     target_compile_options(clipboard-manager PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+# ─── Install target ──────────────────────────────────────────────────────────
+# `cmake --install build` copies the compiled binary to the system PATH so the
+# user can run `clipboard-manager` from any directory in their terminal.
+#
+# The default install prefix is:
+#   /usr/local          on macOS and Linux  → binary lands in /usr/local/bin
+#   C:/Program Files    on Windows          → binary lands in …/bin
+#
+# Override the prefix at configure time:
+#   cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/your/path
+install(TARGETS clipboard-manager
+        RUNTIME DESTINATION bin)   # RUNTIME = executables (.exe on Windows)

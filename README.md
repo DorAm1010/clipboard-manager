@@ -20,18 +20,39 @@ Copy anything — the manager quietly records it so you can retrieve it later.
 
 All platforms need **CMake ≥ 3.16**.
 
-## Build
+## Build & Install
 
 ```bash
-# 1. Configure (creates the build/ folder)
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+# 1. Clone
+git clone https://github.com/YOUR_USERNAME/clipboard-manager.git
+cd clipboard-manager
 
-# 2. Compile
+# 2. Configure
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+# 3. Compile
 cmake --build build --parallel
 
-# 3. Run
+# 4. Install globally (makes `clipboard-manager` available system-wide)
+sudo cmake --install build          # macOS / Linux  → /usr/local/bin
+cmake --install build               # Windows (run as Administrator)
+```
+
+After installing, run from any terminal:
+```bash
+clipboard-manager
+```
+
+To uninstall, delete the binary:
+```bash
+sudo rm /usr/local/bin/clipboard-manager   # macOS / Linux
+```
+
+### Run without installing
+
+```bash
 ./build/clipboard-manager          # macOS / Linux
-build\Debug\clipboard-manager.exe  # Windows
+build\Release\clipboard-manager.exe  # Windows
 ```
 
 ## Usage
