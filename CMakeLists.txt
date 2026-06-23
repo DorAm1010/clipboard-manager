@@ -10,6 +10,7 @@ set(SOURCES
     src/ClipboardManager.cpp
     src/platform/paths.cpp
 )
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ─── Platform-specific sources ───────────────────────────────────────────────
 if(APPLE)
@@ -20,7 +21,17 @@ elseif(UNIX)
     list(APPEND SOURCES src/platform/clipboard_linux.cpp)
 endif()
 
+# ─── CLI11 (command-line parsing) ────────────────────────────────────────────
+include(FetchContent)
+FetchContent_Declare(
+    cli11
+    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+    GIT_TAG        v2.4.2
+)
+FetchContent_MakeAvailable(cli11)
+
 add_executable(clipboard-manager ${SOURCES})
+target_link_libraries(clipboard-manager CLI11::CLI11)
 
 target_include_directories(clipboard-manager PRIVATE src src/platform)
 

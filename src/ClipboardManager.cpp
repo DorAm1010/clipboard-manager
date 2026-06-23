@@ -53,12 +53,14 @@ void ClipboardManager::loadHistory(const std::string &path)
     while (std::getline(inFile, line))
     {
         std::istringstream iss(line);
-        std::string timestampStr, content;
-        if (std::getline(iss, timestampStr, '|') && std::getline(iss, content))
+        std::string timestampStr, content, copyCountStr;
+        if (std::getline(iss, timestampStr, '|') && std::getline(iss, content, '|') && std::getline(iss, copyCountStr))
         {
             std::time_t timestamp = std::stoll(timestampStr);
+            int copyCount = std::stoi(copyCountStr);
             newHistory.emplace_back(content);
             newHistory.back().timestamp = std::chrono::system_clock::from_time_t(timestamp);
+            newHistory.back().copyCount = copyCount;
         }
     }
     m_history = std::move(newHistory);
@@ -94,6 +96,21 @@ std::vector<ClipboardEntry> ClipboardManager::search(const std::string &keyword)
     return results;
 }
 
+int ClipboardManager::exists(const std::string &text)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    int index = 0;
+    for (const auto &entry : m_history)
+    {
+        if (entry.content == text)
+        {
+            return index;
+        }
+        ++index;
+    }
+    return -1;
+}
+
 void ClipboardManager::start()
 {
     m_running.store(true);
@@ -104,15 +121,27 @@ void ClipboardManager::start()
     while (m_running.load())
     {
         std::string current = readClipboard();
-
+        if (current == m_lastSeen)
+        {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(m_pollIntervalMs));
+            continue;
+        }
+        m_lastSeen = current; // Update last-seen to avoid duplicate notifications
         // Guard 1: ignore empty reads — the clipboard may hold an image,
         //          a file reference, or simply be empty right now.
         // Guard 2: ignore unchanged content — the clipboard text is still
         //          the same as last time we checked; nothing to record.
-        if (!current.empty() && current != m_lastSeen)
+        int existingIndex = exists(current);
+        if (existingIndex >= 0)
         {
-            m_lastSeen = current;
-
+            // If the entry already exists, increment its copyCount
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_history[existingIndex].copyCount++;
+            m_history[existingIndex].timestamp = std::chrono::system_clock::now(); // Update timestamp
+        }
+        else if (!current.empty())
+        {
             // Capture the text and timestamp together in one entry object.
             ClipboardEntry entry(current);
 

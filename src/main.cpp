@@ -2,6 +2,7 @@
 #include "platform/paths.h"
 #include "ansi.h"
 
+#include <CLI/CLI.hpp>
 #include <iostream>
 #include <iomanip>
 #include <sstream>
@@ -110,11 +111,13 @@ void printHistory(const ClipboardManager &mgr)
     for (size_t i = 0; i < entries.size(); ++i)
     {
         std::cout << ansi::entryColor(i)
-                  << "  [" << (i + 1) << "] "
+                  << "  [" << (i + 1) << "] " << ansi::reset()
                   << formatTime(entries[i].timestamp)
-                  << "  "
+                  << " | "
                   << truncate(entries[i].content)
-                  << ansi::reset() << std::endl;
+                  << " | "
+                  << "copied " << entries[i].copyCount << " times"
+                  << std::endl;
     }
     std::cout << "─────────────────────────────────────\n\n";
 }
@@ -130,11 +133,13 @@ void printSearchResults(const std::vector<ClipboardEntry> &results, const std::s
     for (size_t i = 0; i < results.size(); ++i)
     {
         std::cout << ansi::entryColor(i)
-                  << "  [" << (i + 1) << "] "
+                  << "  [" << (i + 1) << "] " << ansi::reset()
                   << formatTime(results[i].timestamp)
-                  << "  "
+                  << " | "
                   << truncate(results[i].content)
-                  << ansi::reset() << std::endl;
+                  << " | "
+                  << "copied " << results[i].copyCount << " times"
+                  << std::endl;
     }
     std::cout << "─────────────────────────────────────\n\n";
 }

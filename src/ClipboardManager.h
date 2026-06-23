@@ -30,6 +30,8 @@ struct ClipboardEntry
     /// without losing precision.
     std::chrono::system_clock::time_point timestamp;
 
+    int copyCount = 1; // Number of times this entry has been copied to the clipboard
+
     /**
      * @brief Construct an entry from a text string, stamping the current time.
      *
@@ -215,6 +217,14 @@ private:
      * @param text  The text to write to the clipboard.
      */
     void writeClipboard(const std::string &text);
+
+    /**
+     * @brief Check if a text entry exists in the history.
+     *
+     * @param text  The text to search for.
+     * @return The index of the text if it exists in the history, -1 otherwise.
+     */
+    int exists(const std::string &text);
 
     /// Mutex to protect access to the history and last-seen values.
     /// This is needed because `history()` and `clearHistory()` can be called
