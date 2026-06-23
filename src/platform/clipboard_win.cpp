@@ -25,7 +25,11 @@
 // WIN32_LEAN_AND_MEAN strips rarely-used headers from windows.h, reducing
 // compile time and avoiding macro collisions with standard C++ names.
 #define WIN32_LEAN_AND_MEAN
+#define ISATTY _isatty
+#define STDOUT_FILENO 1
+
 #include <windows.h>
+#include <io.h>
 
 /**
  * @brief Read the current plain-text content of the Windows clipboard.
@@ -49,7 +53,8 @@ std::string ClipboardManager::readClipboard()
     // We pass nullptr for the window handle because we are a console app
     // with no HWND. Only one process can have the clipboard open at a time;
     // if another app currently holds it, OpenClipboard() returns FALSE.
-    if (!OpenClipboard(nullptr)) {
+    if (!OpenClipboard(nullptr))
+    {
         return {};
     }
 
@@ -57,16 +62,18 @@ std::string ClipboardManager::readClipboard()
     // clipboard format for UTF-16 encoded text. Returns nullptr if no text
     // is currently on the clipboard (e.g., an image was copied).
     HANDLE hData = GetClipboardData(CF_UNICODETEXT);
-    if (hData == nullptr) {
-        CloseClipboard();   // always release before returning
+    if (hData == nullptr)
+    {
+        CloseClipboard(); // always release before returning
         return {};
     }
 
     // GlobalLock() pins the global memory block in place and returns a typed
     // pointer to its contents. The block is owned by the clipboard — we must
     // not free it. GlobalUnlock() releases the pin when we are done reading.
-    wchar_t* pText = static_cast<wchar_t*>(GlobalLock(hData));
-    if (pText == nullptr) {
+    wchar_t *pText = static_cast<wchar_t *>(GlobalLock(hData));
+    if (pText == nullptr)
+    {
         CloseClipboard();
         return {};
     }
@@ -76,14 +83,14 @@ std::string ClipboardManager::readClipboard()
     // terminator). Passing -1 as the source length tells the function to
     // measure up to (and including) the null terminator automatically.
     int sizeNeeded = WideCharToMultiByte(
-        CP_UTF8,    // target code page: UTF-8
-        0,          // no special flags
-        pText,      // source wide string
-        -1,         // source length: auto-detect via null terminator
-        nullptr,    // output buffer: nullptr → just measure
-        0,          // output buffer size: 0 → just measure
-        nullptr,    // default char (not used for UTF-8)
-        nullptr);   // used default char flag (not used for UTF-8)
+        CP_UTF8,  // target code page: UTF-8
+        0,        // no special flags
+        pText,    // source wide string
+        -1,       // source length: auto-detect via null terminator
+        nullptr,  // output buffer: nullptr → just measure
+        0,        // output buffer size: 0 → just measure
+        nullptr,  // default char (not used for UTF-8)
+        nullptr); // used default char flag (not used for UTF-8)
 
     // Allocate the result string and fill it.
     // sizeNeeded includes the null terminator; std::string manages its own
@@ -94,15 +101,38 @@ std::string ClipboardManager::readClipboard()
     // Pass 2: perform the actual conversion into our pre-sized buffer.
     WideCharToMultiByte(
         CP_UTF8, 0, pText, -1,
-        result.data(),  // write directly into std::string's buffer (C++17)
+        result.data(), // write directly into std::string's buffer (C++17)
         sizeNeeded,
         nullptr, nullptr);
 
     // Release resources in reverse acquisition order.
-    GlobalUnlock(hData);    // unpin the global memory block
-    CloseClipboard();       // release the clipboard for other processes
+    GlobalUnlock(hData); // unpin the global memory block
+    CloseClipboard();    // release the clipboard for other processes
 
     return result;
+}
+
+void ClipboardManager::writeClipboard(const std::string &text)
+{
+    if (!OpenClipboard(nullptr))
+        return;
+    EmptyClipboard();
+
+    // Convert UTF-8 to UTF-16
+    int wideLen = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, wideLen * sizeof(wchar_t));
+    if (!hMem)
+    {
+        CloseClipboard();
+        return;
+    }
+
+    wchar_t *pMem = static_cast<wchar_t *>(GlobalLock(hMem));
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, pMem, wideLen);
+    GlobalUnlock(hMem);
+
+    SetClipboardData(CF_UNICODETEXT, hMem);
+    CloseClipboard();
 }
 
 #endif // _WIN32

@@ -145,6 +145,15 @@ void ClipboardManager::start()
     std::cout << "[ClipboardManager] Stopped.\n";
 }
 
+bool ClipboardManager::pasteEntry(size_t index)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (index >= m_history.size())
+        return false;
+    writeClipboard(m_history[index].content);
+    return true;
+}
+
 void ClipboardManager::stop()
 {
     // Setting m_running to false causes the while-loop in start() to exit

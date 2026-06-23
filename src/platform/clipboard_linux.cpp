@@ -26,8 +26,8 @@
 #if defined(__linux__)
 
 #include "ClipboardManager.h"
-#include <cstdio>   // popen(), pclose(), fread()
-#include <array>    // std::array for the read buffer
+#include <cstdio> // popen(), pclose(), fread()
+#include <array>  // std::array for the read buffer
 
 /**
  * @brief Read the current plain-text content of the X11 clipboard.
@@ -55,8 +55,9 @@ std::string ClipboardManager::readClipboard()
     // Launch xclip and open a read pipe to its stdout.
     // The "r" mode means we can only read from the pipe (as opposed to "w"
     // which would write to the child's stdin).
-    FILE* pipe = popen("xclip -selection clipboard -o 2>/dev/null", "r");
-    if (!pipe) {
+    FILE *pipe = popen("xclip -selection clipboard -o 2>/dev/null", "r");
+    if (!pipe)
+    {
         // popen() failed (e.g., xclip not found, fork() failed).
         return {};
     }
@@ -73,7 +74,8 @@ std::string ClipboardManager::readClipboard()
     // fread() reads up to buffer.size() bytes from the pipe into buffer.data()
     // and returns the number of bytes actually read. A return value of 0
     // means EOF (xclip finished writing) or an error.
-    while (fread(buffer.data(), 1, buffer.size(), pipe) > 0) {
+    while (fread(buffer.data(), 1, buffer.size(), pipe) > 0)
+    {
         // append() copies exactly as many bytes as fread returned into result.
         // Accumulating in a std::string is safe for arbitrary-length output.
         result.append(buffer.data(), buffer.size());
@@ -84,6 +86,21 @@ std::string ClipboardManager::readClipboard()
     // status has not been collected by the parent).
     pclose(pipe);
     return result;
+}
+
+void ClipboardManager::writeClipboard(const std::string &text)
+{
+    // Platform-specific implementation to write text to the clipboard.
+    // This is a placeholder and should be implemented according to the
+    // target operating system (e.g., using WinAPI on Windows, pbcopy on macOS, etc.).
+    FILE *pipe = popen("xclip -selection clipboard -i", "w");
+    if (!pipe)
+    {
+        // popen() failed (e.g., xclip not found, fork() failed).
+        return {};
+    }
+    fwrite(text.data(), 1, text.size(), pipe);
+    pclose(pipe);
 }
 
 #endif // __linux__

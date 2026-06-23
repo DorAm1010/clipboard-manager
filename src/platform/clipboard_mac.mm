@@ -53,3 +53,11 @@ std::string ClipboardManager::readClipboard()
     // so we no longer depend on the NSString's lifetime after this line.
     return std::string([text UTF8String]);
 }
+
+void ClipboardManager::writeClipboard(const std::string &text)
+{
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    [pb clearContents];  // must clear before writing
+    [pb setString:[NSString stringWithUTF8String:text.c_str()]
+          forType:NSPasteboardTypeString];
+}

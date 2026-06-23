@@ -1,5 +1,6 @@
 #include "ClipboardManager.h"
 #include "platform/paths.h"
+#include "ansi.h"
 
 #include <iostream>
 #include <iomanip>
@@ -108,11 +109,12 @@ void printHistory(const ClipboardManager &mgr)
     std::cout << "\n── Clipboard History (" << entries.size() << " entries) ──\n";
     for (size_t i = 0; i < entries.size(); ++i)
     {
-        std::cout << "  [" << (i + 1) << "] "
+        std::cout << ansi::entryColor(i)
+                  << "  [" << (i + 1) << "] "
                   << formatTime(entries[i].timestamp)
                   << "  "
                   << truncate(entries[i].content)
-                  << "\n";
+                  << ansi::reset() << std::endl;
     }
     std::cout << "─────────────────────────────────────\n\n";
 }
@@ -127,13 +129,37 @@ void printSearchResults(const std::vector<ClipboardEntry> &results, const std::s
     std::cout << "\n── Search Results for \"" << keyword << "\" (" << results.size() << " entries) ──\n";
     for (size_t i = 0; i < results.size(); ++i)
     {
-        std::cout << "  [" << (i + 1) << "] "
+        std::cout << ansi::entryColor(i)
+                  << "  [" << (i + 1) << "] "
                   << formatTime(results[i].timestamp)
                   << "  "
                   << truncate(results[i].content)
-                  << "\n";
+                  << ansi::reset() << std::endl;
     }
     std::cout << "─────────────────────────────────────\n\n";
+}
+
+void pasteEntry(ClipboardManager &mgr, const std::string &numberStr)
+{
+    size_t index = 0;
+    try
+    {
+        index = std::stoi(numberStr);
+    }
+    catch (const std::invalid_argument &)
+    {
+        std::cout << "Invalid index. Please enter a valid number.\n";
+        return;
+    }
+    catch (const std::out_of_range &)
+    {
+        std::cout << "Index out of range. Please enter a smaller number.\n";
+        return;
+    }
+    if (index == 0 || !mgr.pasteEntry(index - 1))
+    {
+        std::cout << "Invalid entry number.\n";
+    }
 }
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
@@ -165,6 +191,7 @@ int main()
     std::cout << "  h  – show history\n";
     std::cout << "  c  – clear history\n";
     std::cout << "  s  – search history\n";
+    std::cout << "  p  – paste from history\n";
     std::cout << "  q  – quit\n\n";
 
     // Keep last 50 entries; check the clipboard every 500 ms.
@@ -183,8 +210,13 @@ int main()
     // changes. The lambda captures nothing — it only uses its parameter.
     // std::flush forces the "> " prompt to appear immediately after the
     // notification line, even though std::cout is line-buffered by default.
-    manager.onNewEntry([](const ClipboardEntry &entry)
-                       { std::cout << "[new] "
+    std::string newEntryMessage = "[new] ";
+    if (ansi::supportsColor())
+    {
+        newEntryMessage = std::string(ansi::entryColor(0)) + newEntryMessage + ansi::reset();
+    }
+    manager.onNewEntry([newEntryMessage](const ClipboardEntry &entry)
+                       { std::cout << newEntryMessage
                                    << truncate(entry.content, 60)
                                    << "\n> " << std::flush; });
 
@@ -225,6 +257,17 @@ int main()
             std::getline(std::cin, keyword);
             auto results = manager.search(keyword);
             printSearchResults(results, keyword);
+        }
+        else if (line.substr(0, 2) == "p " || line.substr(0, 6) == "paste ")
+        {
+            std::string numberStr = (line[0] == 'p' && line[1] == ' ')
+                                        ? line.substr(2)
+                                        : line.substr(6);
+            pasteEntry(manager, numberStr);
+        }
+        else if (line.empty())
+        {
+            printHistory(manager);
         }
         else if (!line.empty())
         {

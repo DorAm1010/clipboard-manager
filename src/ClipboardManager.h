@@ -187,6 +187,13 @@ public:
      */
     void clearHistory();
 
+    /**
+     * @brief Write text to the system clipboard.
+     *
+     * @param text  The text to write to the clipboard.
+     */
+    bool pasteEntry(size_t index);
+
 private:
     /**
      * @brief Read the current plain-text content of the system clipboard.
@@ -201,6 +208,13 @@ private:
      *         non-text data, is empty, or cannot be read.
      */
     std::string readClipboard();
+
+    /**
+     * @brief Write text to the system clipboard.
+     *
+     * @param text  The text to write to the clipboard.
+     */
+    void writeClipboard(const std::string &text);
 
     /// Mutex to protect access to the history and last-seen values.
     /// This is needed because `history()` and `clearHistory()` can be called
