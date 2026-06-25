@@ -74,11 +74,12 @@ std::string ClipboardManager::readClipboard()
     // fread() reads up to buffer.size() bytes from the pipe into buffer.data()
     // and returns the number of bytes actually read. A return value of 0
     // means EOF (xclip finished writing) or an error.
-    while (fread(buffer.data(), 1, buffer.size(), pipe) > 0)
+    size_t n;
+    while ((n = fread(buffer.data(), 1, buffer.size(), pipe)) > 0)
     {
         // append() copies exactly as many bytes as fread returned into result.
         // Accumulating in a std::string is safe for arbitrary-length output.
-        result.append(buffer.data(), buffer.size());
+        result.append(buffer.data(), n);
     }
 
     // pclose() sends a wait() for the child process and releases the FILE*.
