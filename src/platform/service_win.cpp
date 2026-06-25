@@ -23,8 +23,8 @@
 #include "ClipboardManager.h"
 
 #define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>   // must come before windows.h
-#include <afunix.h>     // AF_UNIX support on Windows 10+
+#include <winsock2.h> // must come before windows.h
+#include <afunix.h>   // AF_UNIX support on Windows 10+
 #include <windows.h>
 
 #include <fstream>
@@ -32,6 +32,8 @@
 #include <string>
 #include <string_view>
 #include <cstdio>
+#include <cstring> // strlen
+#include <cstdlib> // EXIT_SUCCESS / EXIT_FAILURE
 
 // Link against the Winsock library.
 #pragma comment(lib, "Ws2_32.lib")
@@ -82,8 +84,8 @@ int Service::stop()
     {
         std::cout << "Daemon stopped successfully.\n";
         CloseHandle(hProcess);
-        std::remove(Service::PID_FILE_PATH.c_str());  // Clean up PID file
-        std::remove(Service::SOCKET_PATH.c_str());    // Clean up socket file
+        std::remove(Service::PID_FILE_PATH.c_str()); // Clean up PID file
+        std::remove(Service::SOCKET_PATH.c_str());   // Clean up socket file
         return EXIT_SUCCESS;
     }
 
