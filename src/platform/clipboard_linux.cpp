@@ -97,7 +97,7 @@ void ClipboardManager::writeClipboard(const std::string &text)
     if (!pipe)
     {
         // popen() failed (e.g., xclip not found, fork() failed).
-        return {};
+        return;
     }
     fwrite(text.data(), 1, text.size(), pipe);
     pclose(pipe);
