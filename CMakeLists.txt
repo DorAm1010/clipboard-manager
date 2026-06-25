@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
-project(ClipboardManager VERSION 0.1.0 LANGUAGES CXX OBJCXX)
+project(ClipboardManager VERSION 0.1.0 LANGUAGES CXX)
+
+# Objective-C++ is only needed on macOS (for clipboard_mac.mm). Enabling it
+# unconditionally breaks the Linux build, where GCC ships no Objective-C++
+# frontend (cc1objplus). Enable it only where it is actually used.
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
