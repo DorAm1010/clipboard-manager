@@ -58,3 +58,8 @@ std::string getHistoryFilePath()
 {
     return getDataDir() + "history.txt";
 }
+
+std::string getSocketPath()
+{
+    return getDataDir() + "clipboard-manager.sock";
+}

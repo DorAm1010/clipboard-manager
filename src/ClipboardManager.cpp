@@ -6,6 +6,63 @@
 #include <fstream>
 #include <sstream>
 
+// ─── File-format helpers ──────────────────────────────────────────────────────
+//
+// The on-disk / on-wire format is one entry per line: TIMESTAMP|content|COUNT.
+// Because the line is split on '\n', any newline inside the copied text would
+// corrupt the format (one entry would span several lines). To avoid that we
+// escape newlines to the two-character sequence "\n" on the way out, and undo
+// it on the way back in. A literal backslash is escaped first so the mapping
+// is reversible.
+
+namespace
+{
+    // Replace each '\\' with "\\\\" and each '\n' with "\\n".
+    std::string escapeNewlines(const std::string &s)
+    {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s)
+        {
+            if (c == '\\')
+                out += "\\\\";
+            else if (c == '\n')
+                out += "\\n";
+            else
+                out += c;
+        }
+        return out;
+    }
+
+    // Reverse escapeNewlines(): turn "\\n" back into '\n' and "\\\\" into '\\'.
+    std::string unescapeNewlines(const std::string &s)
+    {
+        std::string out;
+        out.reserve(s.size());
+        for (size_t i = 0; i < s.size(); ++i)
+        {
+            if (s[i] == '\\' && i + 1 < s.size())
+            {
+                char next = s[i + 1];
+                if (next == 'n')
+                {
+                    out += '\n';
+                    ++i;
+                    continue;
+                }
+                if (next == '\\')
+                {
+                    out += '\\';
+                    ++i;
+                    continue;
+                }
+            }
+            out += s[i];
+        }
+        return out;
+    }
+}
+
 // ─── Constructor / Destructor ─────────────────────────────────────────────────
 
 ClipboardManager::ClipboardManager(size_t maxHistory, unsigned int pollIntervalMs)
@@ -34,8 +91,24 @@ void ClipboardManager::saveHistory(const std::string &path) const
 
     for (const auto &entry : m_history)
     {
-        outFile << std::chrono::system_clock::to_time_t(entry.timestamp) << "|" << entry.content << "\n";
+        outFile << std::chrono::system_clock::to_time_t(entry.timestamp)
+                << "|" << escapeNewlines(entry.content)
+                << "|" << entry.copyCount
+                << "\n";
     }
+}
+
+std::string ClipboardManager::serializeHistory() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::ostringstream oss;
+    for (const auto &entry : m_history)
+    {
+        oss << std::chrono::system_clock::to_time_t(entry.timestamp)
+            << "|" << escapeNewlines(entry.content)
+            << "|" << entry.copyCount << "\n";
+    }
+    return oss.str();
 }
 
 void ClipboardManager::loadHistory(const std::string &path)
@@ -44,10 +117,8 @@ void ClipboardManager::loadHistory(const std::string &path)
 
     std::ifstream inFile(path);
     if (!inFile)
-    {
-        std::cerr << "Error: Could not open file for reading: " << path << "\n";
         return;
-    }
+
     std::deque<ClipboardEntry> newHistory;
     std::string line;
     while (std::getline(inFile, line))
@@ -58,7 +129,7 @@ void ClipboardManager::loadHistory(const std::string &path)
         {
             std::time_t timestamp = std::stoll(timestampStr);
             int copyCount = std::stoi(copyCountStr);
-            newHistory.emplace_back(content);
+            newHistory.emplace_back(unescapeNewlines(content));
             newHistory.back().timestamp = std::chrono::system_clock::from_time_t(timestamp);
             newHistory.back().copyCount = copyCount;
         }

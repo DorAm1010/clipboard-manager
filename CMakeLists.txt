@@ -14,11 +14,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ─── Platform-specific sources ───────────────────────────────────────────────
 if(APPLE)
-    list(APPEND SOURCES src/platform/clipboard_mac.mm)
+    list(APPEND SOURCES src/platform/clipboard_mac.mm src/platform/service_unix.cpp)
 elseif(WIN32)
-    list(APPEND SOURCES src/platform/clipboard_win.cpp)
+    list(APPEND SOURCES src/platform/clipboard_win.cpp src/platform/service_win.cpp)
 elseif(UNIX)
-    list(APPEND SOURCES src/platform/clipboard_linux.cpp)
+    list(APPEND SOURCES src/platform/clipboard_linux.cpp src/platform/service_unix.cpp)
 endif()
 
 # ─── CLI11 (command-line parsing) ────────────────────────────────────────────

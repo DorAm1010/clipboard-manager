@@ -196,6 +196,20 @@ public:
      */
     bool pasteEntry(size_t index);
 
+    /**
+     * @brief Serialize the current history into a string.
+     *
+     * @return A string representation of the history, suitable for saving to a file.
+     */
+    std::string serializeHistory() const;
+
+    /**
+     * @brief Check if the polling loop is currently running.
+     *
+     * @return true if the loop is running, false otherwise.
+     */
+    bool isRunning() const { return m_running.load(); }
+
 private:
     /**
      * @brief Read the current plain-text content of the system clipboard.

@@ -1,6 +1,7 @@
 #include "ClipboardManager.h"
 #include "platform/paths.h"
 #include "ansi.h"
+#include "platform/service.hpp"
 
 #include <CLI/CLI.hpp>
 #include <iostream>
@@ -117,7 +118,7 @@ void printHistory(const ClipboardManager &mgr)
                   << truncate(entries[i].content)
                   << " | "
                   << "copied " << entries[i].copyCount << " times"
-                  << std::endl;
+                  << "\n";
     }
     std::cout << "─────────────────────────────────────\n\n";
 }
@@ -139,7 +140,7 @@ void printSearchResults(const std::vector<ClipboardEntry> &results, const std::s
                   << truncate(results[i].content)
                   << " | "
                   << "copied " << results[i].copyCount << " times"
-                  << std::endl;
+                  << "\n";
     }
     std::cout << "─────────────────────────────────────\n\n";
 }
@@ -167,27 +168,8 @@ void pasteEntry(ClipboardManager &mgr, const std::string &numberStr)
     }
 }
 
-// ─── Entry point ──────────────────────────────────────────────────────────────
-
-/**
- * @brief Program entry point.
- *
- * Orchestrates three cooperating components:
- *   1. A ClipboardManager that polls the OS clipboard on a background thread.
- *   2. An OS signal handler that cleanly stops the manager on Ctrl+C / SIGTERM.
- *   3. A command loop on the main thread that reads user input and dispatches
- *      commands (show history, clear history, quit).
- *
- * Threading model:
- *   - Main thread:       reads stdin, prints prompts, dispatches commands.
- *   - monitorThread:     runs ClipboardManager::start(), blocks on sleep(),
- *                        exits when m_running becomes false.
- *   - Signal handler:    not a thread — it interrupts whatever thread happens
- *                        to be executing when the signal arrives.
- *
- * @return 0 on normal exit.
- */
-int main()
+// make this banner into a --help flag in the future
+void printPlatformInfo()
 {
     std::cout << "╔══════════════════════════════════╗\n";
     std::cout << "║      Clipboard Manager v0.1      ║\n";
@@ -198,7 +180,13 @@ int main()
     std::cout << "  s  – search history\n";
     std::cout << "  p  – paste from history\n";
     std::cout << "  q  – quit\n\n";
+}
 
+// ─── Entry point ──────────────────────────────────────────────────────────────
+
+void run()
+{
+    printPlatformInfo();
     // Keep last 50 entries; check the clipboard every 500 ms.
     ClipboardManager manager(50, 500);
 
@@ -281,8 +269,6 @@ int main()
         std::cout << "> " << std::flush;
     }
 
-    manager.saveHistory(getHistoryFilePath());
-
     // join() blocks the main thread until monitorThread has returned from
     // manager.start(). This is mandatory: destroying a std::thread object
     // that is still joinable calls std::terminate(), crashing the program.
@@ -290,7 +276,104 @@ int main()
     {
         monitorThread.join();
     }
-
+    manager.saveHistory(getHistoryFilePath());
     std::cout << "Goodbye!\n";
+}
+
+void runAsDaemon()
+{
+    // Keep last 50 entries; check the clipboard every 500 ms.
+    ClipboardManager manager(50, 500);
+
+    manager.loadHistory(getHistoryFilePath());
+    // Expose the manager to the signal handler before registering signals,
+    // so the handler is never called with a null pointer.
+    g_manager = &manager;
+
+    // Replace the default SIGINT / SIGTERM handlers with our clean-shutdown handler.
+    std::signal(SIGINT, handleSignal);
+    std::signal(SIGTERM, handleSignal);
+
+    // Spin up a background thread that runs the blocking poll loop.
+    // The lambda captures manager by reference ([&manager]) — the reference
+    // stays valid because manager lives in main()'s stack frame for the
+    // entire duration of monitorThread.
+    std::thread monitorThread([&manager]()
+                              { manager.start(); });
+    std::thread socketThread([&manager]()
+                             { Service::createHistoryRequestSocket(manager); });
+
+    // Wait for the background thread to finish (it will run until stop() is called).
+    if (monitorThread.joinable())
+    {
+        monitorThread.join();
+    }
+    if (socketThread.joinable())
+    {
+        socketThread.join();
+    }
+    manager.saveHistory(getHistoryFilePath());
+}
+
+/**
+ * @brief Program entry point.
+ *
+ * Orchestrates three cooperating components:
+ *   1. A ClipboardManager that polls the OS clipboard on a background thread.
+ *   2. An OS signal handler that cleanly stops the manager on Ctrl+C / SIGTERM.
+ *   3. A command loop on the main thread that reads user input and dispatches
+ *      commands (show history, clear history, quit).
+ *
+ * Threading model:
+ *   - Main thread:       reads stdin, prints prompts, dispatches commands.
+ *   - monitorThread:     runs ClipboardManager::start(), blocks on sleep(),
+ *                        exits when m_running becomes false.
+ *   - Signal handler:    not a thread — it interrupts whatever thread happens
+ *                        to be executing when the signal arrives.
+ *
+ * @return 0 on normal exit.
+ */
+int main(int argc, char *argv[])
+{
+    CLI::App app{"Clipboard Manager App"};
+    bool daemon_mode{false};
+    bool stop_mode{false};
+    bool history_mode{false};
+
+    auto d_flag = app.add_flag("-d,--daemon", daemon_mode, "Run app as a background daemon");
+    auto s_flag = app.add_flag("-k,--kill", stop_mode, "kill the running daemon process");
+    auto history_flag = app.add_flag("-H,--history", history_mode, "Show the clipboard history and exit");
+
+    // Production constraint: Exclude flags from being used together
+    d_flag->excludes(s_flag);
+    s_flag->excludes(d_flag);
+
+    // Enforce parsing constraints rules cleanly
+    CLI11_PARSE(app, argc, argv);
+
+    // If --kill was requested, call stop and exit early
+    if (stop_mode)
+    {
+        return Service::stop();
+    }
+    // After CLI11_PARSE:
+    if (history_mode)
+    {
+        Service::requestHistory();
+        return 0;
+    }
+    if (daemon_mode)
+    {
+        if (Service::daemonize() != 0)
+        {
+            std::cerr << "Failed to enter background mode.\n";
+            return 1;
+        }
+        runAsDaemon();
+    }
+    else
+    {
+        run();
+    }
     return 0;
 }

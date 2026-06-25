@@ -22,3 +22,11 @@ std::string getDataDir();
  * Convenience wrapper: getDataDir() + "history.txt"
  */
 std::string getHistoryFilePath();
+
+/**
+ * @brief Return the full path to the socket file (Unix) or named pipe (Windows).
+ *
+ * Convenience wrapper: getDataDir() + "clipboard-manager.sock" (Unix)
+ * or getDataDir() + "clipboard-manager.pipe" (Windows)
+ */
+std::string getSocketPath();
