@@ -1,9 +1,5 @@
 #if !defined(_WIN32)
 
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0
-#endif
-
 #include "service.hpp"
 #include "ClipboardManager.h"
 
@@ -20,7 +16,17 @@
 #include <sys/un.h>
 #include <poll.h>
 #include <filesystem>
-#include <cstring>
+#include <cstring>  // strlen
+#include <cstdio>   // std::perror, std::remove
+#include <cstdlib>  // EXIT_SUCCESS / EXIT_FAILURE
+
+// MSG_NOSIGNAL prevents send() from raising SIGPIPE if the peer has closed the
+// connection. Linux defines it in <sys/socket.h> (included above), but macOS
+// does not — so we only fall back to 0 when the platform header didn't define
+// it. This MUST come after <sys/socket.h> so we never redefine the real value.
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
 
 namespace fs = std::filesystem;
 
