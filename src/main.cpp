@@ -189,10 +189,15 @@ void pasteEntry(ClipboardManager &mgr, const std::string &numberStr)
         std::cout << "Index out of range. Please enter a smaller number.\n";
         return;
     }
-    if (index == 0 || !mgr.pasteEntry(index - 1))
+    std::string content;
+    if (index == 0 || !mgr.pasteEntry(index - 1, content))
     {
         std::cout << "Invalid entry number.\n";
+        return;
     }
+    // "Paste" the entry into the terminal by printing its full content, and
+    // (via pasteEntry) it has also been placed on the system clipboard.
+    std::cout << content << "\n";
 }
 
 // make this banner into a --help flag in the future

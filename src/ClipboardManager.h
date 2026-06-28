@@ -190,11 +190,18 @@ public:
     void clearHistory();
 
     /**
-     * @brief Write text to the system clipboard.
+     * @brief Copy the history entry at @p index back onto the system clipboard
+     *        and return its content.
      *
-     * @param text  The text to write to the clipboard.
+     * Looks up the entry, writes its text to the system clipboard (so it can be
+     * pasted into other apps), and hands the same text back via @p outContent so
+     * the caller can also display it.
+     *
+     * @param index       Zero-based index into the history (newest entries last).
+     * @param outContent  Set to the entry's text on success; untouched on failure.
+     * @return            true if @p index was valid, false if out of range.
      */
-    bool pasteEntry(size_t index);
+    bool pasteEntry(size_t index, std::string &outContent);
 
     /**
      * @brief Serialize the current history into a string.
@@ -231,14 +238,6 @@ private:
      * @param text  The text to write to the clipboard.
      */
     void writeClipboard(const std::string &text);
-
-    /**
-     * @brief Check if a text entry exists in the history.
-     *
-     * @param text  The text to search for.
-     * @return The index of the text if it exists in the history, -1 otherwise.
-     */
-    int exists(const std::string &text);
 
     /// Mutex to protect access to the history and last-seen values.
     /// This is needed because `history()` and `clearHistory()` can be called

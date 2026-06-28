@@ -5,6 +5,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <algorithm>
 
 // ─── File-format helpers ──────────────────────────────────────────────────────
 //
@@ -137,7 +138,8 @@ void ClipboardManager::loadHistory(const std::string &path)
     m_history = std::move(newHistory);
     if (!m_history.empty())
     {
-        m_lastSeen = m_history.back().content;
+        // history[0] is the most-recently-used entry under MRU ordering.
+        m_lastSeen = m_history.front().content;
     }
 }
 
@@ -167,24 +169,15 @@ std::vector<ClipboardEntry> ClipboardManager::search(const std::string &keyword)
     return results;
 }
 
-int ClipboardManager::exists(const std::string &text)
-{
-    std::lock_guard<std::mutex> lock(m_mutex);
-    int index = 0;
-    for (const auto &entry : m_history)
-    {
-        if (entry.content == text)
-        {
-            return index;
-        }
-        ++index;
-    }
-    return -1;
-}
-
 void ClipboardManager::start()
 {
     m_running.store(true);
+
+    // Seed m_lastSeen with whatever is already on the clipboard so that
+    // pre-existing content is treated as "already seen" and is NOT captured
+    // as a new entry. The manager only records copies made after it starts
+    // watching.
+    m_lastSeen = readClipboard();
 
     std::cout << "[ClipboardManager] Started. Polling every "
               << m_pollIntervalMs << "ms.\n";
@@ -198,41 +191,53 @@ void ClipboardManager::start()
                 std::chrono::milliseconds(m_pollIntervalMs));
             continue;
         }
-        m_lastSeen = current; // Update last-seen to avoid duplicate notifications
-        // Guard 1: ignore empty reads — the clipboard may hold an image,
-        //          a file reference, or simply be empty right now.
-        // Guard 2: ignore unchanged content — the clipboard text is still
-        //          the same as last time we checked; nothing to record.
-        int existingIndex = exists(current);
-        if (existingIndex >= 0)
+        m_lastSeen = current; // Remember what we acted on, so we don't re-capture it.
+
+        // Ignore empty reads — the clipboard may hold an image, a file
+        // reference, or simply be empty right now.
+        if (current.empty())
         {
-            // If the entry already exists, increment its copyCount
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_history[existingIndex].copyCount++;
-            m_history[existingIndex].timestamp = std::chrono::system_clock::now(); // Update timestamp
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(m_pollIntervalMs));
+            continue;
         }
-        else if (!current.empty())
+
+        // History is kept in most-recently-used order: index 0 is the newest.
         {
-            // Capture the text and timestamp together in one entry object.
-            ClipboardEntry entry(current);
-
-            // Enforce the sliding-window size limit: if we are at capacity,
-            // drop the oldest (front) entry before adding the new one.
-            // erase(begin()) on a vector is O(n) because all subsequent
-            // elements shift left by one. For small histories (≤100 entries)
-            // this is negligible. See ROADMAP Task 1.3 for a deque upgrade.
             std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_history.size() >= m_maxHistory)
-            {
-                m_history.pop_front();
-            }
-            m_history.push_back(entry);
 
-            // Fire the registered callback if the caller provided one.
-            // std::function is truthy when it holds a callable, falsy when empty.
-            if (m_callback)
+            // Is this exact text already somewhere in the history?
+            auto it = std::find_if(m_history.begin(), m_history.end(),
+                                   [&current](const ClipboardEntry &e)
+                                   { return e.content == current; });
+
+            if (it != m_history.end())
             {
-                m_callback(entry);
+                // Already present: promote it to the front (most recent),
+                // bump its copy count and refresh its timestamp.
+                ClipboardEntry promoted = std::move(*it);
+                promoted.copyCount++;
+                promoted.timestamp = std::chrono::system_clock::now();
+                m_history.erase(it);
+                m_history.push_front(std::move(promoted));
+            }
+            else
+            {
+                // Genuinely new content. Enforce the size limit by evicting the
+                // least-recently-used entry (the back), then insert at the front
+                // so the newest entry is always m_history[0].
+                if (m_history.size() >= m_maxHistory)
+                {
+                    m_history.pop_back();
+                }
+                m_history.push_front(ClipboardEntry(current));
+
+                // Fire the registered callback for genuinely new entries only.
+                // std::function is truthy when it holds a callable.
+                if (m_callback)
+                {
+                    m_callback(m_history.front());
+                }
             }
         }
 
@@ -245,12 +250,18 @@ void ClipboardManager::start()
     std::cout << "[ClipboardManager] Stopped.\n";
 }
 
-bool ClipboardManager::pasteEntry(size_t index)
+bool ClipboardManager::pasteEntry(size_t index, std::string &outContent)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (index >= m_history.size())
         return false;
-    writeClipboard(m_history[index].content);
+    outContent = m_history[index].content;
+    writeClipboard(outContent);
+
+    // Mark the text we just put on the clipboard as already-seen so the polling
+    // loop does NOT re-capture it as a new copy (which would bump its copyCount).
+    // Pasting from history should not count as a fresh clipboard event.
+    m_lastSeen = outContent;
     return true;
 }
 
@@ -269,10 +280,16 @@ std::deque<ClipboardEntry> ClipboardManager::history() const
 
 void ClipboardManager::clearHistory()
 {
+    // Read the current clipboard BEFORE locking so we don't hold the mutex
+    // during the (potentially slow) platform clipboard call.
+    std::string current = readClipboard();
+
     std::lock_guard<std::mutex> lock(m_mutex);
     m_history.clear();
 
-    // Also reset m_lastSeen so the next clipboard read is treated as new,
-    // even if the clipboard content has not changed since the last poll.
-    m_lastSeen.clear();
+    // Mark the text currently on the clipboard as already-seen so that
+    // 'clear' stays cleared: the content still physically on the clipboard
+    // is NOT immediately re-captured on the next poll. Only a genuinely new
+    // copy after this point will be recorded.
+    m_lastSeen = current;
 }
