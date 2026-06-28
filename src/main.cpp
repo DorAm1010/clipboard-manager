@@ -10,6 +10,8 @@
 #include <csignal>
 #include <thread>
 #include <atomic>
+#include <algorithm>
+#include <string>
 
 // For closing stdin from the signal handler (see handleSignal).
 #ifdef _WIN32
@@ -100,32 +102,167 @@ std::string formatTime(const std::chrono::system_clock::time_point &tp)
     return oss.str();
 }
 
-/**
- * @brief Shorten a string to at most maxLen characters for terminal display.
- *
- * If the string is already short enough it is returned unchanged. Otherwise
- * the last three characters of the truncated string are replaced with "..."
- * to signal that content was omitted.
- *
- * @param s       The string to (possibly) truncate.
- * @param maxLen  Maximum allowed length including the "..." suffix.
- * @return        The original string, or a truncated copy ending in "...".
- */
-std::string truncate(const std::string &s, size_t maxLen = 72)
+namespace
 {
-    if (s.size() <= maxLen)
-        return s;
-    return s.substr(0, maxLen - 3) + "...";
+    // Number of UTF-8 code points in a string ≈ its display width in columns.
+    // We count every byte that is NOT a UTF-8 continuation byte (0b10xxxxxx).
+    // Caveat: true double-width glyphs (CJK, emoji) are counted as width 1, so
+    // those would still misalign — handling them needs a wcwidth-style table.
+    // For ASCII plus single-width symbols (⏎, ─, accents) this is exact.
+    int displayWidth(const std::string &s)
+    {
+        int w = 0;
+        for (unsigned char c : s)
+            if ((c & 0xC0) != 0x80) // not a continuation byte → start of a code point
+                ++w;
+        return w;
+    }
+
+    // Length in bytes of the UTF-8 code point starting at byte `c`.
+    size_t utf8CharLen(unsigned char c)
+    {
+        if ((c & 0x80) == 0x00)
+            return 1; // 0xxxxxxx
+        if ((c & 0xE0) == 0xC0)
+            return 2; // 110xxxxx
+        if ((c & 0xF0) == 0xE0)
+            return 3; // 1110xxxx
+        if ((c & 0xF8) == 0xF0)
+            return 4; // 11110xxx
+        return 1;     // invalid byte: treat as 1 so we always make progress
+    }
 }
 
 /**
- * @brief Print all history entries to stdout in a numbered, timestamped list.
+ * @brief Collapse a string to a single line and shorten it for terminal display.
  *
- * Calls mgr.history() which returns a copy of the internal vector, so this
- * function safely iterates a stable snapshot even if the background thread
- * is concurrently adding new entries.
+ * Embedded newlines / carriage returns become a "⏎" marker so a multi-line entry
+ * renders on one line. The result is then truncated to at most maxLen display
+ * columns (UTF-8 aware — it never slices a character in half), appending "..."
+ * if it was cut.
  *
- * @param mgr  The ClipboardManager whose history to display.
+ * @param s       The string to collapse and truncate.
+ * @param maxLen  Maximum display width including the "..." suffix.
+ * @return        A single-line copy, truncated with "..." if it exceeded maxLen.
+ */
+std::string truncate(const std::string &s, size_t maxLen = 72)
+{
+    // First flatten any line breaks to a visible marker.
+    std::string oneLine;
+    oneLine.reserve(s.size());
+    for (char c : s)
+    {
+        if (c == '\n' || c == '\r')
+            oneLine += "⏎"; // ⏎ (return symbol)
+        else
+            oneLine += c;
+    }
+
+    if (static_cast<size_t>(displayWidth(oneLine)) <= maxLen)
+        return oneLine;
+
+    // Walk whole code points until we've kept (maxLen - 3) columns, then add "...".
+    const size_t targetCols = maxLen - 3;
+    size_t cols = 0;
+    size_t i = 0;
+    while (i < oneLine.size() && cols < targetCols)
+    {
+        i += utf8CharLen(static_cast<unsigned char>(oneLine[i]));
+        ++cols;
+    }
+    return oneLine.substr(0, i) + "...";
+}
+
+// ─── Table rendering helpers ───────────────────────────────────────────────────
+//
+// These build a box-drawn table using only the standard library — no third-party
+// dependency. Note: padding is computed on byte length, so columns may misalign
+// slightly for content with multi-byte UTF-8 characters (accents, emoji, the ⏎
+// marker). For mostly-ASCII clipboard text this looks clean.
+
+namespace
+{
+    // Pad a string on the right with spaces to a given display width (UTF-8 aware).
+    std::string padRight(const std::string &s, int width)
+    {
+        int len = displayWidth(s);
+        return len >= width ? s : s + std::string(width - len, ' ');
+    }
+
+    // Pad a string on the left with spaces (used for right-aligned numbers).
+    std::string padLeft(const std::string &s, int width)
+    {
+        int len = displayWidth(s);
+        return len >= width ? s : std::string(width - len, ' ') + s;
+    }
+
+    // Build a horizontal rule like "├────┼──────┼────┤". Each column reserves
+    // width+2 dashes to account for the single space of padding on each side.
+    std::string hrule(const char *left, const char *mid, const char *right,
+                      int w1, int w2, int w3, int w4)
+    {
+        auto seg = [](int w)
+        {
+            std::string s;
+            for (int i = 0; i < w + 2; ++i)
+                s += "─";
+            return s;
+        };
+        return std::string(left) + seg(w1) + mid + seg(w2) + mid + seg(w3) + mid + seg(w4) + right;
+    }
+}
+
+/**
+ * @brief Render a list of entries as a box-drawn table: #, Time, Content, Count.
+ *
+ * @param heading  A short title printed above the table.
+ * @param entries  The entries to display (already a stable snapshot).
+ */
+void printTable(const std::string &heading, const std::vector<ClipboardEntry> &entries)
+{
+    // Column content widths (the visible cell width, excluding the 1-space pad
+    // on each side that the borders account for).
+    const int idxW = std::max<int>(1, static_cast<int>(std::to_string(entries.size()).size()));
+    const int timeW = 8; // "HH:MM:SS"
+    const int contentW = 50;
+
+    int maxCount = 1;
+    for (const auto &e : entries)
+        maxCount = std::max(maxCount, e.copyCount);
+    const int countW = std::max<int>(5, static_cast<int>(std::to_string(maxCount).size())); // "Count" is 5 wide
+
+    std::cout << "\n"
+              << heading << "\n";
+    std::cout << hrule("┌", "┬", "┐", idxW, timeW, contentW, countW) << "\n";
+    std::cout << "│ " << padRight("#", idxW)
+              << " │ " << padRight("Time", timeW)
+              << " │ " << padRight("Content", contentW)
+              << " │ " << padRight("Count", countW) << " │\n";
+    std::cout << hrule("├", "┼", "┤", idxW, timeW, contentW, countW) << "\n";
+
+    for (size_t i = 0; i < entries.size(); ++i)
+    {
+        const std::string idx = std::to_string(i + 1);
+        const std::string tm = formatTime(entries[i].timestamp);
+        const std::string content = truncate(entries[i].content, contentW);
+        const std::string cnt = std::to_string(entries[i].copyCount);
+
+        // Color is applied around the already-padded content so the (invisible)
+        // escape codes don't throw off the column alignment.
+        std::cout << "│ " << padLeft(idx, idxW)
+                  << " │ " << padRight(tm, timeW)
+                  << " │ " << ansi::entryColor(i) << padRight(content, contentW) << ansi::reset()
+                  << " │ " << padLeft(cnt, countW) << " │\n";
+    }
+
+    std::cout << hrule("└", "┴", "┘", idxW, timeW, contentW, countW) << "\n\n";
+}
+
+/**
+ * @brief Print the full clipboard history as a table.
+ *
+ * Calls mgr.history() which returns a copy, so this safely iterates a stable
+ * snapshot even if the background thread is concurrently adding entries.
  */
 void printHistory(const ClipboardManager &mgr)
 {
@@ -135,19 +272,9 @@ void printHistory(const ClipboardManager &mgr)
         std::cout << "(history is empty)\n";
         return;
     }
-    std::cout << "\n── Clipboard History (" << entries.size() << " entries) ──\n";
-    for (size_t i = 0; i < entries.size(); ++i)
-    {
-        std::cout << ansi::entryColor(i)
-                  << "  [" << (i + 1) << "] " << ansi::reset()
-                  << formatTime(entries[i].timestamp)
-                  << " | "
-                  << truncate(entries[i].content)
-                  << " | "
-                  << "copied " << entries[i].copyCount << " times"
-                  << "\n";
-    }
-    std::cout << "─────────────────────────────────────\n\n";
+    // history() returns a deque; copy into a vector for the table renderer.
+    std::vector<ClipboardEntry> rows(entries.begin(), entries.end());
+    printTable("Clipboard History (" + std::to_string(rows.size()) + " entries)", rows);
 }
 
 void printSearchResults(const std::vector<ClipboardEntry> &results, const std::string &keyword)
@@ -157,19 +284,7 @@ void printSearchResults(const std::vector<ClipboardEntry> &results, const std::s
         std::cout << "No entries found containing \"" << keyword << "\".\n";
         return;
     }
-    std::cout << "\n── Search Results for \"" << keyword << "\" (" << results.size() << " entries) ──\n";
-    for (size_t i = 0; i < results.size(); ++i)
-    {
-        std::cout << ansi::entryColor(i)
-                  << "  [" << (i + 1) << "] " << ansi::reset()
-                  << formatTime(results[i].timestamp)
-                  << " | "
-                  << truncate(results[i].content)
-                  << " | "
-                  << "copied " << results[i].copyCount << " times"
-                  << "\n";
-    }
-    std::cout << "─────────────────────────────────────\n\n";
+    printTable("Search Results for \"" + keyword + "\" (" + std::to_string(results.size()) + " entries)", results);
 }
 
 void pasteEntry(ClipboardManager &mgr, const std::string &numberStr)

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 
 // ─── File-format helpers ──────────────────────────────────────────────────────
 //
@@ -18,6 +19,17 @@
 
 namespace
 {
+    // ASCII-lowercase a copy of the string. Used to make search case-insensitive.
+    // (This folds A-Z only; full Unicode case folding is out of scope here.)
+    std::string toLower(const std::string &s)
+    {
+        std::string out;
+        out.reserve(s.size());
+        for (unsigned char c : s) // unsigned char: std::tolower is UB on negative values
+            out += static_cast<char>(std::tolower(c));
+        return out;
+    }
+
     // Replace each '\\' with "\\\\" and each '\n' with "\\n".
     std::string escapeNewlines(const std::string &s)
     {
@@ -124,15 +136,36 @@ void ClipboardManager::loadHistory(const std::string &path)
     std::string line;
     while (std::getline(inFile, line))
     {
-        std::istringstream iss(line);
-        std::string timestampStr, content, copyCountStr;
-        if (std::getline(iss, timestampStr, '|') && std::getline(iss, content, '|') && std::getline(iss, copyCountStr))
+        // Format: TIMESTAMP|content|COUNT. The content may itself contain '|'
+        // characters, so we cannot naively split on every '|'. Instead we split
+        // on the FIRST and LAST '|': timestamp is before the first, count is
+        // after the last, and everything in between is the (escaped) content.
+        // timestamp and count are always plain integers, so they never contain
+        // a '|' — this makes the first/last delimiters unambiguous.
+        size_t firstPipe = line.find('|');
+        size_t lastPipe = line.rfind('|');
+
+        // Need at least two distinct '|' for a well-formed record.
+        if (firstPipe == std::string::npos || lastPipe == firstPipe)
+            continue;
+
+        std::string timestampStr = line.substr(0, firstPipe);
+        std::string content = line.substr(firstPipe + 1, lastPipe - firstPipe - 1);
+        std::string copyCountStr = line.substr(lastPipe + 1);
+
+        // A corrupt or partially-written line should be skipped, not crash the
+        // whole program — std::stoll/std::stoi throw on non-numeric input.
+        try
         {
             std::time_t timestamp = std::stoll(timestampStr);
             int copyCount = std::stoi(copyCountStr);
             newHistory.emplace_back(unescapeNewlines(content));
             newHistory.back().timestamp = std::chrono::system_clock::from_time_t(timestamp);
             newHistory.back().copyCount = copyCount;
+        }
+        catch (const std::exception &)
+        {
+            continue; // skip malformed line
         }
     }
     m_history = std::move(newHistory);
@@ -155,12 +188,15 @@ std::vector<ClipboardEntry> ClipboardManager::search(const std::string &keyword)
 {
     std::vector<ClipboardEntry> results;
 
+    // Case-insensitive match: compare lowercased copies of both sides.
+    const std::string loweredKeyword = toLower(keyword);
+
     // Lock the mutex to safely access m_history from this thread.
     std::lock_guard<std::mutex> lock(m_mutex);
 
     for (const auto &entry : m_history)
     {
-        if (entry.content.find(keyword) != std::string::npos)
+        if (toLower(entry.content).find(loweredKeyword) != std::string::npos)
         {
             results.push_back(entry);
         }
