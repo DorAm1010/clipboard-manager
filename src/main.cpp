@@ -11,6 +11,13 @@
 #include <thread>
 #include <atomic>
 
+// For closing stdin from the signal handler (see handleSignal).
+#ifdef _WIN32
+#include <io.h> // _close
+#else
+#include <unistd.h> // close, STDIN_FILENO
+#endif
+
 // ─── Signal handling ──────────────────────────────────────────────────────────
 
 /**
@@ -26,8 +33,21 @@ static ClipboardManager *g_manager = nullptr;
 /**
  * @brief Signal handler for SIGINT (Ctrl+C) and SIGTERM.
  *
- * Tells the ClipboardManager's polling loop to exit on its next iteration,
- * allowing the program to shut down cleanly instead of being killed mid-write.
+ * Two things have to happen for a clean shutdown:
+ *   1. Stop the polling loop  — g_manager->stop() flips the running flag so the
+ *      background monitor thread exits.
+ *   2. Unblock the main thread — in interactive mode the main thread is parked
+ *      inside std::getline(std::cin, ...), which the signal alone does NOT
+ *      interrupt (libc++/libstdc++ retry the read on EINTR). Closing stdin
+ *      forces getline to hit end-of-file and return false, so the command loop
+ *      breaks and the program shuts down just as if the user had typed `q`.
+ *
+ * In daemon mode stdin is already redirected to /dev/null, so closing it is
+ * harmless there.
+ *
+ * Note: close() is async-signal-safe. (The std::cout below technically is not,
+ * but the original handler already used it; for this learning project that is
+ * an acceptable simplification.)
  *
  * @param signum  The signal number delivered by the OS (unused; we handle
  *                SIGINT and SIGTERM identically).
@@ -39,6 +59,13 @@ void handleSignal(int /*signum*/)
     {
         g_manager->stop();
     }
+
+    // Unblock a main thread that is waiting in std::getline by closing stdin.
+#ifdef _WIN32
+    _close(0);
+#else
+    close(STDIN_FILENO);
+#endif
 }
 
 // ─── Helper functions ─────────────────────────────────────────────────────────
