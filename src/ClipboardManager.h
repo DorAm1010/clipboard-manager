@@ -250,10 +250,16 @@ private:
     /// Milliseconds to sleep between successive clipboard reads.
     unsigned int m_pollIntervalMs;
 
-    /// Polling loop control flag. Set to true by start(), false by stop().
-    /// NOTE: accessed from two threads without synchronisation — a known
-    /// limitation to be fixed with std::atomic<bool> (Task 1.1 in roadmap).
-    std::atomic<bool> m_running{false};
+    /// Polling loop control flag. Initialised to true at construction (the
+    /// manager is "armed to run") and only ever set to false by stop().
+    ///
+    /// IMPORTANT: start() must NOT set this to true. Doing so created a race —
+    /// if a caller invoked stop() before the freshly-spawned polling thread ran
+    /// start()'s store(true), that store would clobber the stop() and the loop
+    /// would never exit (a hang). Making stop() the single writer eliminates it.
+    /// (Consequence: restart-after-stop is unsupported, which was already the
+    /// documented contract.)
+    std::atomic<bool> m_running{true};
 
     /// The last clipboard text we acted on, used to detect changes.
     /// Storing this avoids firing the callback when the clipboard content

@@ -207,7 +207,10 @@ std::vector<ClipboardEntry> ClipboardManager::search(const std::string &keyword)
 
 void ClipboardManager::start()
 {
-    m_running.store(true);
+    // NOTE: we deliberately do NOT set m_running = true here. It is initialised
+    // to true at construction and only stop() ever writes it (to false). See the
+    // m_running declaration in the header for why — setting it here races with a
+    // fast stop() and can hang the poll loop forever.
 
     // Seed m_lastSeen with whatever is already on the clipboard so that
     // pre-existing content is treated as "already seen" and is NOT captured

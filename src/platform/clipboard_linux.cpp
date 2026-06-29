@@ -55,7 +55,13 @@ std::string ClipboardManager::readClipboard()
     // Launch xclip and open a read pipe to its stdout.
     // The "r" mode means we can only read from the pipe (as opposed to "w"
     // which would write to the child's stdin).
-    FILE *pipe = popen("xclip -selection clipboard -o 2>/dev/null", "r");
+    //
+    // We wrap xclip in `timeout 2` so a wedged X server / unresponsive
+    // selection owner can never block this call forever. Since this runs in
+    // the 500 ms poll loop (and in a daemon), an unbounded hang here would
+    // freeze the whole program; the timeout caps it at ~2 s and we just treat
+    // a stuck read as "no text this round".
+    FILE *pipe = popen("timeout 2 xclip -selection clipboard -o 2>/dev/null", "r");
     if (!pipe)
     {
         // popen() failed (e.g., xclip not found, fork() failed).
@@ -91,10 +97,12 @@ std::string ClipboardManager::readClipboard()
 
 void ClipboardManager::writeClipboard(const std::string &text)
 {
-    // Platform-specific implementation to write text to the clipboard.
-    // This is a placeholder and should be implemented according to the
-    // target operating system (e.g., using WinAPI on Windows, pbcopy on macOS, etc.).
-    FILE *pipe = popen("xclip -selection clipboard -i", "w");
+    // Write text to the CLIPBOARD selection via xclip. xclip forks a child that
+    // keeps serving the selection after the parent exits; the `timeout 2` only
+    // bounds the initial set (which is near-instant), so it won't kill the
+    // long-lived server child in normal operation — it just prevents a hang if
+    // the X server is unresponsive.
+    FILE *pipe = popen("timeout 2 xclip -selection clipboard -i", "w");
     if (!pipe)
     {
         // popen() failed (e.g., xclip not found, fork() failed).
