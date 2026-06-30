@@ -92,6 +92,18 @@ std::string ClipboardManager::readClipboard()
         nullptr,  // default char (not used for UTF-8)
         nullptr); // used default char flag (not used for UTF-8)
 
+    // Guard against a failed/zero-length conversion. WideCharToMultiByte
+    // returns 0 on failure; computing `sizeNeeded - 1` in that case would
+    // underflow to SIZE_MAX and request a gigantic std::string allocation
+    // (crash). sizeNeeded includes the null terminator, so a valid result is
+    // always >= 1; treat anything <= 0 as "no readable text".
+    if (sizeNeeded <= 0)
+    {
+        GlobalUnlock(hData);
+        CloseClipboard();
+        return {};
+    }
+
     // Allocate the result string and fill it.
     // sizeNeeded includes the null terminator; std::string manages its own
     // null terminator internally, so we subtract 1 to avoid a trailing '\0'
@@ -118,9 +130,17 @@ void ClipboardManager::writeClipboard(const std::string &text)
         return;
     EmptyClipboard();
 
-    // Convert UTF-8 to UTF-16
+    // Convert UTF-8 to UTF-16. MultiByteToWideChar returns 0 on failure; with
+    // -1 as the source length the count includes the null terminator, so a
+    // valid result is always >= 1. Bail on <= 0 rather than GlobalAlloc(0).
     int wideLen = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
-    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, wideLen * sizeof(wchar_t));
+    if (wideLen <= 0)
+    {
+        CloseClipboard();
+        return;
+    }
+
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, static_cast<size_t>(wideLen) * sizeof(wchar_t));
     if (!hMem)
     {
         CloseClipboard();
@@ -128,10 +148,24 @@ void ClipboardManager::writeClipboard(const std::string &text)
     }
 
     wchar_t *pMem = static_cast<wchar_t *>(GlobalLock(hMem));
+    if (!pMem)
+    {
+        // Lock failed: we still own hMem (it was never handed to the clipboard),
+        // so we must free it to avoid leaking the global allocation.
+        GlobalFree(hMem);
+        CloseClipboard();
+        return;
+    }
     MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, pMem, wideLen);
     GlobalUnlock(hMem);
 
-    SetClipboardData(CF_UNICODETEXT, hMem);
+    // On success, SetClipboardData transfers ownership of hMem to the system —
+    // we must NOT free it. On failure ownership stays with us, so free it to
+    // avoid a leak.
+    if (!SetClipboardData(CF_UNICODETEXT, hMem))
+    {
+        GlobalFree(hMem);
+    }
     CloseClipboard();
 }
 

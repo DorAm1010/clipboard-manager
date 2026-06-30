@@ -59,8 +59,15 @@ int Service::daemonize()
     if (setsid() < 0)
         return EXIT_FAILURE;
 
-    // 4. Set file permissions and directory
-    umask(0);
+    // 4. Set file-creation mask and working directory.
+    //
+    // umask(077) clears the group/other permission bits on every file the
+    // daemon subsequently creates (history file, PID file, socket), so they
+    // default to owner-only (0600 / 0700). The previous umask(0) made them
+    // world-readable/writable — a privacy hole given the history can contain
+    // passwords. We do NOT use umask(0): there is no file here that needs to be
+    // group- or world-accessible.
+    umask(077);
     if (chdir("/") < 0)
         return EXIT_FAILURE;
 
@@ -160,6 +167,18 @@ void Service::createHistoryRequestSocket(ClipboardManager &manager)
         return;
     }
 
+    // 4b. Restrict the socket to the owner. On Linux, connecting to a Unix
+    // domain socket requires write permission on the socket file, so 0600
+    // prevents other local users from connecting and dumping the clipboard
+    // history. (On macOS socket-file permissions are not enforced for connect,
+    // but setting them is harmless and documents intent; the data dir is also
+    // already 0700, which blocks traversal there.) Best-effort: a failure here
+    // should not take the daemon down, but do log it.
+    if (chmod(Service::SOCKET_PATH.c_str(), S_IRUSR | S_IWUSR) == -1)
+    {
+        std::perror("Warning: failed to chmod socket to 0600");
+    }
+
     // 5. Start listening for incoming client connections
     if (listen(server_fd, 10) == -1)
     {
@@ -204,8 +223,18 @@ void Service::createHistoryRequestSocket(ClipboardManager &manager)
             close(client_fd);
             continue;
         }
+        // Trim trailing whitespace/newlines so the request matches whether the
+        // client sent "history", "history\n", or "history\r\n". (A request split
+        // across multiple reads is not handled here — fine for this 8-byte
+        // command on a local stream socket.)
         std::string_view received_data(buffer, bytes_read);
-        if (received_data == "history\n")
+        while (!received_data.empty() &&
+               (received_data.back() == '\n' || received_data.back() == '\r' ||
+                received_data.back() == ' ' || received_data.back() == '\t'))
+        {
+            received_data.remove_suffix(1);
+        }
+        if (received_data == "history")
         {
             std::string serialized_history = manager.serializeHistory();
             send(client_fd, serialized_history.data(), serialized_history.length(), MSG_NOSIGNAL);

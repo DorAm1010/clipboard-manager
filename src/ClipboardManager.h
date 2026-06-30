@@ -169,14 +169,19 @@ public:
     void stop();
 
     /**
-     * @brief Return a copy of the current history, oldest entry first.
+     * @brief Return a copy of the current history, newest entry first.
+     *
+     * The history is stored in most-recently-used (MRU) order: index 0 is the
+     * newest entry and the last index is the oldest. (Note: this is the reverse
+     * of insertion order — see start()/loadHistory(), which push_front.)
      *
      * Returns by value (a full copy) so the caller can iterate the snapshot
      * without holding any lock, even if the background thread continues to
      * modify `m_history`. This is safe as long as the caller does not outlive
      * the manager.
      *
-     * @return A deque of ClipboardEntry objects ordered from oldest to newest.
+     * @return A deque of ClipboardEntry objects ordered from newest (front) to
+     *         oldest (back).
      */
     std::deque<ClipboardEntry> history() const;
 
@@ -197,7 +202,8 @@ public:
      * pasted into other apps), and hands the same text back via @p outContent so
      * the caller can also display it.
      *
-     * @param index       Zero-based index into the history (newest entries last).
+     * @param index       Zero-based index into the history in MRU order, so
+     *                    index 0 is the newest entry and larger indices are older.
      * @param outContent  Set to the entry's text on success; untouched on failure.
      * @return            true if @p index was valid, false if out of range.
      */

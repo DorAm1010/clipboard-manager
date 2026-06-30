@@ -491,9 +491,13 @@ int main(int argc, char *argv[])
     auto s_flag = app.add_flag("-k,--kill", stop_mode, "kill the running daemon process");
     auto history_flag = app.add_flag("-H,--history", history_mode, "Show the clipboard history and exit");
 
-    // Production constraint: Exclude flags from being used together
+    // Production constraint: these three modes are mutually exclusive — you
+    // cannot daemonize, kill, and dump history in the same invocation. CLI11's
+    // excludes() is symmetric, so one call per pair is enough; we wire every
+    // pair so any two-flag combination is rejected with a clear error.
     d_flag->excludes(s_flag);
-    s_flag->excludes(d_flag);
+    d_flag->excludes(history_flag);
+    s_flag->excludes(history_flag);
 
     // Enforce parsing constraints rules cleanly
     CLI11_PARSE(app, argc, argv);

@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <system_error>
 
 namespace fs = std::filesystem;
 
@@ -50,6 +51,14 @@ std::string getDataDir()
 
     // Create the directory tree if it doesn't exist yet.
     fs::create_directories(dir);
+
+    // This directory holds the clipboard history (which routinely contains
+    // secrets) and the IPC socket, so restrict it to the owner only (POSIX
+    // 0700). Done with std::filesystem to stay cross-platform; on Windows
+    // owner-only access is governed by ACLs and this is a best-effort no-op.
+    // Errors are intentionally ignored — a failure here must not stop startup.
+    std::error_code ec;
+    fs::permissions(dir, fs::perms::owner_all, fs::perm_options::replace, ec);
 
     return dir.string() + std::string(1, fs::path::preferred_separator);
 }

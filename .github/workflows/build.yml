@@ -24,6 +24,11 @@ jobs:
                   sudo apt-get install -y libx11-dev libxfixes-dev xclip
             - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
             - run: cmake --build build --config Release
+            # Run the CTest suite (currently the start/stop data-race regression
+            # test). --build-config matches the multi-config generator on Windows;
+            # --output-on-failure prints test logs only when something fails.
+            - name: Test (ctest)
+              run: ctest --test-dir build --build-config Release --output-on-failure
             - name: Smoke test (Unix)
               if: runner.os != 'Windows'
               run: ./build/clipboard-manager --help

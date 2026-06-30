@@ -173,8 +173,18 @@ void Service::createHistoryRequestSocket(ClipboardManager &manager)
             continue;
         }
 
+        // Trim trailing whitespace/newlines so the request matches whether the
+        // client sent "history", "history\n", or "history\r\n". (A request split
+        // across multiple reads is not handled here — fine for this 8-byte
+        // command on a local stream socket.)
         std::string_view received_data(buffer, bytes_read);
-        if (received_data == "history\n")
+        while (!received_data.empty() &&
+               (received_data.back() == '\n' || received_data.back() == '\r' ||
+                received_data.back() == ' ' || received_data.back() == '\t'))
+        {
+            received_data.remove_suffix(1);
+        }
+        if (received_data == "history")
         {
             std::string serialized_history = manager.serializeHistory();
             send(client_fd, serialized_history.data(),

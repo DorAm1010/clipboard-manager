@@ -10,23 +10,50 @@ endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# ─── Source files shared by all platforms ────────────────────────────────────
-set(SOURCES
-    src/main.cpp
+# ─── Core library (everything except main()) ─────────────────────────────────
+# Factored into a static library so both the application and the test
+# executables link the same compiled objects (compile once, reuse).
+set(CORE_SOURCES
     src/ClipboardManager.cpp
     src/platform/paths.cpp
 )
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# ─── Platform-specific sources ───────────────────────────────────────────────
 if(APPLE)
-    list(APPEND SOURCES src/platform/clipboard_mac.mm src/platform/service_unix.cpp)
+    list(APPEND CORE_SOURCES src/platform/clipboard_mac.mm src/platform/service_unix.cpp)
 elseif(WIN32)
-    list(APPEND SOURCES src/platform/clipboard_win.cpp src/platform/service_win.cpp)
+    list(APPEND CORE_SOURCES src/platform/clipboard_win.cpp src/platform/service_win.cpp)
 elseif(UNIX)
-    list(APPEND SOURCES src/platform/clipboard_linux.cpp src/platform/service_unix.cpp)
+    list(APPEND CORE_SOURCES src/platform/clipboard_linux.cpp src/platform/service_unix.cpp)
 endif()
+
+add_library(clipboard_core STATIC ${CORE_SOURCES})
+
+# PUBLIC so anything linking the core (app + tests) inherits the include paths.
+target_include_directories(clipboard_core PUBLIC src src/platform)
+
+# Platform link dependencies — PUBLIC so consumers inherit them too.
+if(APPLE)
+    target_link_libraries(clipboard_core PUBLIC
+        "-framework Cocoa"
+        "-framework AppKit"
+    )
+elseif(WIN32)
+    target_link_libraries(clipboard_core PUBLIC user32)
+elseif(UNIX)
+    # Requires libx11-dev and libxfixes-dev on Debian/Ubuntu
+    find_package(X11 REQUIRED)
+    target_link_libraries(clipboard_core PUBLIC X11::X11 X11::Xfixes)
+endif()
+
+# ─── Compiler warnings (shared by all targets) ───────────────────────────────
+if(MSVC)
+    set(PROJECT_WARNINGS /W4)
+else()
+    set(PROJECT_WARNINGS -Wall -Wextra -Wpedantic)
+endif()
+target_compile_options(clipboard_core PRIVATE ${PROJECT_WARNINGS})
 
 # ─── CLI11 (command-line parsing) ────────────────────────────────────────────
 include(FetchContent)
@@ -37,31 +64,10 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(cli11)
 
-add_executable(clipboard-manager ${SOURCES})
-target_link_libraries(clipboard-manager CLI11::CLI11)
-
-target_include_directories(clipboard-manager PRIVATE src src/platform)
-
-# ─── Platform-specific linker flags ──────────────────────────────────────────
-if(APPLE)
-    target_link_libraries(clipboard-manager
-        "-framework Cocoa"
-        "-framework AppKit"
-    )
-elseif(WIN32)
-    target_link_libraries(clipboard-manager user32)
-elseif(UNIX)
-    # Requires libx11-dev and libxfixes-dev on Debian/Ubuntu
-    find_package(X11 REQUIRED)
-    target_link_libraries(clipboard-manager X11::X11 X11::Xfixes)
-endif()
-
-# ─── Compiler warnings ───────────────────────────────────────────────────────
-if(MSVC)
-    target_compile_options(clipboard-manager PRIVATE /W4)
-else()
-    target_compile_options(clipboard-manager PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+# ─── Application ─────────────────────────────────────────────────────────────
+add_executable(clipboard-manager src/main.cpp)
+target_link_libraries(clipboard-manager PRIVATE clipboard_core CLI11::CLI11)
+target_compile_options(clipboard-manager PRIVATE ${PROJECT_WARNINGS})
 
 # ─── Install target ──────────────────────────────────────────────────────────
 # `cmake --install build` copies the compiled binary to the system PATH so the
@@ -75,3 +81,19 @@ endif()
 #   cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/your/path
 install(TARGETS clipboard-manager
         RUNTIME DESTINATION bin)   # RUNTIME = executables (.exe on Windows)
+
+# ─── Tests ───────────────────────────────────────────────────────────────────
+# enable_testing() registers the suite with CTest; `ctest` (or the CI step)
+# then runs every add_test() target. The race regression test relies on its
+# per-test TIMEOUT: if the start/stop race ever returns, a join() hangs and
+# CTest fails the test instead of letting it block forever.
+enable_testing()
+
+add_executable(race_regression_test tests/race_regression_test.cpp)
+target_link_libraries(race_regression_test PRIVATE clipboard_core)
+target_compile_options(race_regression_test PRIVATE ${PROJECT_WARNINGS})
+
+add_test(NAME race_regression COMMAND race_regression_test)
+# Generous cap: the test completes in seconds when healthy; if it hangs (the
+# bug regressed) CTest kills it here and reports failure.
+set_tests_properties(race_regression PROPERTIES TIMEOUT 120)
