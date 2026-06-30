@@ -10,8 +10,26 @@
  *     robust background service would be a Windows Service via the SCM,
  *     but that is well beyond the scope of this learning project.)
  *   - Stopping: read the PID file and call TerminateProcess().
- *   - IPC: Windows 10 (1803+) supports AF_UNIX sockets via <afunix.h>,
- *     so the socket logic is almost identical to the POSIX version.
+ *   - IPC: a TCP socket bound to the loopback interface (127.0.0.1).
+ *
+ * Why loopback TCP and not AF_UNIX?
+ *   Windows 10 (1803+) does support AF_UNIX sockets, and we used to. But a
+ *   Unix-domain socket leaves a *file* (a reparse point with tag
+ *   IO_REPARSE_TAG_AF_UNIX) on disk. When the daemon is force-killed
+ *   (TerminateProcess, used by `--kill`) or crashes, that socket file is
+ *   orphaned — and an orphaned AF_UNIX socket file cannot be deleted from user
+ *   space (every DeleteFile/remove returns ERROR_CANT_ACCESS_FILE / 1920).
+ *   The next daemon start then fails to bind() with WSAEINVAL forever, leaving
+ *   `--history` permanently broken until a reboot. A loopback TCP socket has no
+ *   on-disk artifact: when the process dies the OS frees the port immediately,
+ *   so the whole orphan problem disappears.
+ *
+ *   The price is that any *local* user/process can connect to 127.0.0.1, whereas
+ *   the AF_UNIX socket was chmod'd to 0600. We restore owner-only access with a
+ *   capability token: the daemon writes a random token alongside the port into a
+ *   file inside the data dir (which is already 0700), and only a client that
+ *   presents the matching token is served. A local attacker who cannot read the
+ *   owner's data dir therefore cannot read the clipboard history.
  *
  * Winsock requires WSAStartup()/WSACleanup() around all socket usage, uses
  * SOCKET/INVALID_SOCKET instead of int/-1, and closesocket() instead of close().
@@ -24,19 +42,52 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h> // must come before windows.h
-#include <afunix.h>   // AF_UNIX support on Windows 10+
+#include <ws2tcpip.h>
 #include <windows.h>
 
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <random>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <cstdio>
 #include <cstring> // strlen
 #include <cstdlib> // EXIT_SUCCESS / EXIT_FAILURE
 
-// Link against the Winsock library.
+// Link against the Winsock library. This pragma only takes effect under MSVC;
+// other toolchains (MinGW/GCC, Clang) ignore it, so the CMake build also links
+// ws2_32 explicitly for the Windows target.
 #pragma comment(lib, "Ws2_32.lib")
+
+namespace
+{
+    // Where the daemon advertises its loopback port + access token. Lives in the
+    // data dir (0700), so only the owner can read the token. Replaces the AF_UNIX
+    // socket file that the previous implementation used.
+    std::string portFilePath()
+    {
+        return getDataDir() + "clipboard-manager.port";
+    }
+
+    // A 128-bit random token, hex-encoded. Used as a capability: a client must
+    // present it to be served, which limits access to processes that can read the
+    // owner-only port file.
+    std::string generateToken()
+    {
+        std::random_device rd;
+        std::mt19937_64 gen(
+            (static_cast<uint64_t>(rd()) << 32) ^ rd() ^
+            static_cast<uint64_t>(GetCurrentProcessId()));
+        std::uniform_int_distribution<uint64_t> dist;
+
+        std::ostringstream oss;
+        oss << std::hex << std::setfill('0');
+        oss << std::setw(16) << dist(gen) << std::setw(16) << dist(gen);
+        return oss.str();
+    }
+}
 
 int Service::daemonize()
 {
@@ -75,17 +126,20 @@ int Service::stop()
     {
         std::cerr << "Failed to open process. It may have already exited.\n";
         std::remove(Service::PID_FILE_PATH.c_str());
-        std::remove(Service::SOCKET_PATH.c_str());
+        std::remove(portFilePath().c_str());
         return EXIT_FAILURE;
     }
 
-    // Windows has no SIGTERM; TerminateProcess is the closest equivalent.
+    // Windows has no SIGTERM; TerminateProcess is the closest equivalent. The
+    // daemon leaves no socket file behind (loopback TCP), so the only cleanup
+    // needed is the PID and port files — both are ordinary files that remove()
+    // can delete.
     if (TerminateProcess(hProcess, 0))
     {
         std::cout << "Daemon stopped successfully.\n";
         CloseHandle(hProcess);
         std::remove(Service::PID_FILE_PATH.c_str()); // Clean up PID file
-        std::remove(Service::SOCKET_PATH.c_str());   // Clean up socket file
+        std::remove(portFilePath().c_str());         // Clean up port/token file
         return EXIT_SUCCESS;
     }
 
@@ -103,43 +157,66 @@ void Service::createHistoryRequestSocket(ClipboardManager &manager)
         return;
     }
 
-    // Clean up any stale socket file from a previous crashed run, otherwise
-    // bind() fails with "address already in use".
-    std::remove(Service::SOCKET_PATH.c_str());
-
-    SOCKET server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    SOCKET server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == INVALID_SOCKET)
     {
-        std::cerr << "Failed to create socket.\n";
+        std::cerr << "Failed to create socket. WSA error " << WSAGetLastError() << "\n";
         WSACleanup();
         return;
     }
 
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    if (Service::SOCKET_PATH.length() >= sizeof(addr.sun_path))
-    {
-        std::cerr << "Socket path is too long.\n";
-        closesocket(server_fd);
-        WSACleanup();
-        return;
-    }
-    strncpy_s(addr.sun_path, sizeof(addr.sun_path), Service::SOCKET_PATH.data(), _TRUNCATE);
+    // Bind to the loopback interface only (never the public network) on an
+    // ephemeral port (port 0 → the OS picks a free one). Restricting to
+    // 127.0.0.1 means the port is unreachable from other hosts.
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
 
     if (bind(server_fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == SOCKET_ERROR)
     {
-        std::cerr << "Failed to bind socket.\n";
+        int err = WSAGetLastError();
+        std::cerr << "Failed to bind socket. WSA error " << err << "\n";
         closesocket(server_fd);
         WSACleanup();
         return;
     }
 
-    if (listen(server_fd, 10) == SOCKET_ERROR)
+    // Discover the port the OS assigned so we can advertise it to clients.
+    sockaddr_in bound{};
+    int bound_len = sizeof(bound);
+    if (getsockname(server_fd, reinterpret_cast<sockaddr *>(&bound), &bound_len) == SOCKET_ERROR)
     {
-        std::cerr << "Failed to listen on socket.\n";
+        std::cerr << "Failed to read bound port. WSA error " << WSAGetLastError() << "\n";
         closesocket(server_fd);
         WSACleanup();
         return;
+    }
+    const unsigned short port = ntohs(bound.sin_port);
+
+    if (listen(server_fd, 10) == SOCKET_ERROR)
+    {
+        std::cerr << "Failed to listen on socket. WSA error " << WSAGetLastError() << "\n";
+        closesocket(server_fd);
+        WSACleanup();
+        return;
+    }
+
+    // Generate a per-run access token and advertise "<port>\n<token>" in the
+    // owner-only data dir. Written only after the socket is ready to accept, so
+    // a client that successfully reads the file can immediately connect.
+    const std::string token = generateToken();
+    {
+        std::ofstream port_file(portFilePath(), std::ios::trunc);
+        if (port_file.is_open())
+        {
+            port_file << port << "\n"
+                      << token << "\n";
+        }
+        else
+        {
+            std::cerr << "Failed to write port file.\n";
+        }
     }
 
     // Do not block indefinitely in accept(), otherwise this thread can never
@@ -165,7 +242,7 @@ void Service::createHistoryRequestSocket(ClipboardManager &manager)
             continue;
         }
 
-        char buffer[128];
+        char buffer[256];
         int bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
         if (bytes_read <= 0)
         {
@@ -174,9 +251,9 @@ void Service::createHistoryRequestSocket(ClipboardManager &manager)
         }
 
         // Trim trailing whitespace/newlines so the request matches whether the
-        // client sent "history", "history\n", or "history\r\n". (A request split
-        // across multiple reads is not handled here — fine for this 8-byte
-        // command on a local stream socket.)
+        // client sent "history <tok>", "history <tok>\n", or "...\r\n". (A
+        // request split across multiple reads is not handled here — fine for
+        // this short command on a local stream socket.)
         std::string_view received_data(buffer, bytes_read);
         while (!received_data.empty() &&
                (received_data.back() == '\n' || received_data.back() == '\r' ||
@@ -184,7 +261,20 @@ void Service::createHistoryRequestSocket(ClipboardManager &manager)
         {
             received_data.remove_suffix(1);
         }
-        if (received_data == "history")
+
+        // Expected request: "history <token>". Split on the first space.
+        std::string_view command = received_data;
+        std::string_view client_token;
+        const auto space = received_data.find(' ');
+        if (space != std::string_view::npos)
+        {
+            command = received_data.substr(0, space);
+            client_token = received_data.substr(space + 1);
+        }
+
+        // Constant-ish comparison is unnecessary here — the token is high-entropy
+        // and the channel is loopback-only — so a plain compare is fine.
+        if (command == "history" && client_token == token)
         {
             std::string serialized_history = manager.serializeHistory();
             send(client_fd, serialized_history.data(),
@@ -195,12 +285,24 @@ void Service::createHistoryRequestSocket(ClipboardManager &manager)
     }
 
     closesocket(server_fd);
-    std::remove(Service::SOCKET_PATH.c_str());
+    std::remove(portFilePath().c_str());
     WSACleanup();
 }
 
 void Service::requestHistory()
 {
+    // Read the daemon's advertised loopback port and access token.
+    unsigned short port = 0;
+    std::string token;
+    {
+        std::ifstream port_file(portFilePath());
+        if (!port_file.is_open() || !(port_file >> port) || !(port_file >> token) || port == 0)
+        {
+            std::cerr << "Failed to connect to daemon socket. Is the daemon running?\n";
+            return;
+        }
+    }
+
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
     {
@@ -208,7 +310,7 @@ void Service::requestHistory()
         return;
     }
 
-    SOCKET sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == INVALID_SOCKET)
     {
         std::cerr << "Failed to create socket.\n";
@@ -216,9 +318,10 @@ void Service::requestHistory()
         return;
     }
 
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    strncpy_s(addr.sun_path, sizeof(addr.sun_path), Service::SOCKET_PATH.data(), _TRUNCATE);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(port);
 
     if (connect(sock, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == SOCKET_ERROR)
     {
@@ -228,8 +331,8 @@ void Service::requestHistory()
         return;
     }
 
-    const char *request = "history\n";
-    send(sock, request, static_cast<int>(strlen(request)), 0);
+    const std::string request = "history " + token + "\n";
+    send(sock, request.data(), static_cast<int>(request.length()), 0);
 
     char buffer[1024];
     int bytes_received;

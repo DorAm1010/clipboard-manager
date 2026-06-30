@@ -40,7 +40,11 @@ if(APPLE)
         "-framework AppKit"
     )
 elseif(WIN32)
-    target_link_libraries(clipboard_core PUBLIC user32)
+    # user32: clipboard APIs.  ws2_32: Winsock, used by service_win.cpp for the
+    # local IPC socket. ws2_32 must be declared here rather than relying on the
+    # MSVC-only `#pragma comment(lib, "Ws2_32.lib")` in service_win.cpp, which
+    # other toolchains (MinGW/GCC, Clang) silently ignore.
+    target_link_libraries(clipboard_core PUBLIC user32 ws2_32)
 elseif(UNIX)
     # Requires libx11-dev and libxfixes-dev on Debian/Ubuntu
     find_package(X11 REQUIRED)
