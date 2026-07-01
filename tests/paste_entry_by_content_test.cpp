@@ -24,6 +24,7 @@
 #include "ClipboardManager.h"
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -59,7 +60,15 @@ namespace
 
 int main()
 {
-    const std::string tempPath = "/tmp/paste_entry_by_content_test_history.txt";
+    // std::filesystem::temp_directory_path() resolves to the right place on
+    // every platform (e.g. $TMPDIR/tmp on macOS/Linux, %TEMP% on Windows). A
+    // hardcoded "/tmp/..." previously broke on Windows CI runners, where
+    // there is no /tmp directory on the D: drive: the ofstream in
+    // writeTempHistoryFile() silently failed to open (never checked), so
+    // loadHistory() loaded 0 entries and every check below cascaded from
+    // that single failure.
+    const std::string tempPath =
+        (std::filesystem::temp_directory_path() / "paste_entry_by_content_test_history.txt").string();
     writeTempHistoryFile(tempPath);
 
     ClipboardManager manager(/*maxHistory=*/50, /*pollIntervalMs=*/500);
