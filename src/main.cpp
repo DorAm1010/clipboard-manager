@@ -3,11 +3,11 @@
 #include "ansi.h"
 #include "platform/service.hpp"
 
-// Global hotkey listener for the popup window. Only implemented on macOS so
-// far (hotkey_mac.mm); every use of Hotkey:: below is therefore guarded with
-// #if defined(__APPLE__) so Windows/Linux builds never need to link symbols
-// that don't exist yet on those platforms.
-#if defined(__APPLE__)
+// Global hotkey listener for the popup window. Implemented on macOS
+// (hotkey_mac.mm) and Linux (hotkey_linux.cpp) so far; every use of Hotkey::
+// below is therefore guarded with #if defined(__APPLE__) || defined(__linux__)
+// so the Windows build never needs to link symbols that don't exist yet there.
+#if defined(__APPLE__) || defined(__linux__)
 #include "platform/hotkey.h"
 #endif
 
@@ -51,10 +51,12 @@ static ClipboardManager *g_manager = nullptr;
  *      interrupt (libc++/libstdc++ retry the read on EINTR). Closing stdin
  *      forces getline to hit end-of-file and return false, so the command loop
  *      breaks and the program shuts down just as if the user had typed `q`.
- *   3. (macOS daemon mode only) Unblock the hotkey run loop — Hotkey::runEventLoop()
- *      parks the main thread in CFRunLoopRun(); without this call that loop
- *      would never notice the shutdown and the daemon would hang exactly like
- *      the start/stop race fixed earlier in this project.
+ *   3. (macOS/Linux daemon mode only) Unblock the hotkey run loop —
+ *      Hotkey::runEventLoop() parks the main thread pumping platform events
+ *      (CFRunLoopRun() on macOS, a select()-based X11 loop on Linux); without
+ *      this call that loop would never notice the shutdown and the daemon
+ *      would hang exactly like the start/stop race fixed earlier in this
+ *      project.
  *
  * In daemon mode stdin is already redirected to /dev/null, so closing it is
  * harmless there.
@@ -74,7 +76,7 @@ void handleSignal(int /*signum*/)
         g_manager->stop();
     }
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__linux__)
     Hotkey::requestStop();
 #endif
 
@@ -466,13 +468,14 @@ void runAsDaemon()
     std::thread socketThread([&manager]()
                              { Service::createHistoryRequestSocket(manager); });
 
-#if defined(__APPLE__)
-    // STEP 1 of the popup-window work: register the global hotkey and block
-    // THIS (main) thread pumping its event loop, since Carbon/CoreFoundation
-    // hotkey delivery is tied to the thread that registered it. monitorThread
-    // and socketThread keep running exactly as before on their own threads.
-    // handleSignal() calls Hotkey::requestStop() to unblock this on shutdown.
-    // There is no popup window yet — runEventLoop()'s handler just logs.
+#if defined(__APPLE__) || defined(__linux__)
+    // Register the global hotkey and block THIS (main) thread pumping its
+    // event loop (Carbon/CoreFoundation on macOS, X11 on Linux — see
+    // hotkey_mac.mm / hotkey_linux.cpp). monitorThread and socketThread keep
+    // running exactly as before on their own threads. handleSignal() calls
+    // Hotkey::requestStop() to unblock this on shutdown. On Linux there is no
+    // popup window yet (STEP 1 of that port) — runEventLoop()'s handler just
+    // logs when the hotkey fires.
     Hotkey::runEventLoop(manager);
 #endif
 

@@ -25,7 +25,7 @@ if(APPLE)
 elseif(WIN32)
     list(APPEND CORE_SOURCES src/platform/clipboard_win.cpp src/platform/service_win.cpp)
 elseif(UNIX)
-    list(APPEND CORE_SOURCES src/platform/clipboard_linux.cpp src/platform/service_unix.cpp)
+    list(APPEND CORE_SOURCES src/platform/clipboard_linux.cpp src/platform/service_unix.cpp src/platform/hotkey_linux.cpp)
 endif()
 
 add_library(clipboard_core STATIC ${CORE_SOURCES})

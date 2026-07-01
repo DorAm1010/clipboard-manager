@@ -2,10 +2,10 @@
 
 #include "ClipboardManager.h"
 
-// Cross-platform declaration for the global-hotkey listener. Only macOS has an
-// implementation so far (hotkey_mac.mm); Windows/Linux will get their own
-// hotkey_win.cpp / hotkey_linux.cpp in a later step, and main.cpp only calls
-// into this on the platforms where it's implemented (see the #if in main.cpp).
+// Cross-platform declaration for the global-hotkey listener. Implemented on
+// macOS (hotkey_mac.mm) and Linux (hotkey_linux.cpp) so far; Windows will get
+// its own hotkey_win.cpp in a later step, and main.cpp only calls into this
+// on the platforms where it's implemented (see the #if in main.cpp).
 namespace Hotkey
 {
     /**
