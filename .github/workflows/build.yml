@@ -35,3 +35,28 @@ jobs:
             - name: Smoke test (Windows)
               if: runner.os == 'Windows'
               run: .\build\Release\clipboard-manager.exe --help
+            # A successful build only proves the code compiles/links against
+            # the dev headers — it doesn't prove the GTK/X11 runtime actually
+            # works on a fresh runner. Start the daemon under a real (virtual)
+            # X server and confirm it reaches "hotkey registered" without
+            # crashing, then kill it. CI has no window manager, so this
+            # can't exercise focus-mediated behavior (click-outside-dismiss)
+            # the way the project's local Docker+Xvfb+openbox harness does —
+            # it only proves the daemon starts cleanly at runtime.
+            - name: Runtime smoke test (Linux, under Xvfb)
+              if: runner.os == 'Linux'
+              run: |
+                  xvfb-run --auto-servernum ./build/clipboard-manager -d --foreground > daemon_smoke.log 2>&1 &
+                  sleep 2
+                  if ! grep -q "Registered" daemon_smoke.log; then
+                      echo "Daemon did not report a registered hotkey:"
+                      cat daemon_smoke.log
+                      exit 1
+                  fi
+                  # pkill by pattern rather than tracking a PID directly: the
+                  # backgrounded process is xvfb-run's own wrapper script, and
+                  # a signal sent to that PID is not guaranteed to reach the
+                  # actual clipboard-manager child it launches.
+                  pkill -TERM -f "build/clipboard-manager -d --foreground"
+                  sleep 1
+                  cat daemon_smoke.log
