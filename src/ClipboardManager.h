@@ -210,6 +210,25 @@ public:
     bool pasteEntry(size_t index, std::string &outContent);
 
     /**
+     * @brief Copy the history entry with this exact content back onto the
+     *        system clipboard, promoting it to the front of history (same
+     *        MRU-on-use semantics as pasteEntry()).
+     *
+     * Unlike pasteEntry(), which takes a POSITION that can go stale if the
+     * history changes between when a caller looked at it and when they act on
+     * it, this looks the entry up by its actual text — robust to the history
+     * being mutated by the background poller in between, at the cost of
+     * requiring an exact content match. Content uniqueness is guaranteed by
+     * start()'s own dedup logic (a fresh copy of existing content promotes the
+     * existing entry rather than inserting a duplicate), so at most one entry
+     * can ever match.
+     *
+     * @param content  The exact text of the entry to paste (as shown to the caller).
+     * @return         true if an entry with this content was found and pasted.
+     */
+    bool pasteEntryByContent(const std::string &content);
+
+    /**
      * @brief Serialize the current history into a string.
      *
      * @return A string representation of the history, suitable for saving to a file.

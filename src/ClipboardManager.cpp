@@ -232,14 +232,15 @@ void ClipboardManager::start()
     // as a new entry. The manager only records copies made after it starts
     // watching.
     //
-    // m_lastSeen is shared with pasteEntry()/clearHistory() (which run on other
-    // threads and write it under m_mutex), so EVERY access to it — including
-    // this seed and the comparison below — must hold m_mutex. The clipboard read
-    // itself is done OUTSIDE the lock because it can be slow (a platform call).
+    // In practice nothing else can race this — the GUI/paste path only
+    // becomes reachable once the daemon has fully started and a user has
+    // pressed the hotkey, both far later than this line — but m_lastSeen is
+    // guarded everywhere else, so it's guarded here too rather than leaving
+    // one asymmetric, "probably fine" unlocked access for a future reader (or
+    // reviewer) to puzzle over.
     {
-        std::string seed = readClipboard();
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_lastSeen = std::move(seed);
+        m_lastSeen = readClipboard();
     }
 
     std::cout << "[ClipboardManager] Started. Polling every "
@@ -247,9 +248,6 @@ void ClipboardManager::start()
 
     while (m_running.load())
     {
-        // Read the clipboard without holding the lock (platform call may block).
-        std::string current = readClipboard();
-
         // If we capture a genuinely new entry, we deliver it to the callback
         // AFTER releasing the lock. Firing the callback while holding m_mutex
         // would deadlock if the callback ever called back into the manager
@@ -259,6 +257,22 @@ void ClipboardManager::start()
 
         {
             std::lock_guard<std::mutex> lock(m_mutex);
+
+            // The read MUST happen inside the same critical section as the
+            // compare-and-update below. This used to read the clipboard
+            // outside the lock (to avoid blocking pasteEntry()/history() etc.
+            // during a slow platform call), but that left a race: pasteEntry()
+            // writes the clipboard AND updates m_lastSeen under this same lock,
+            // so if the poller's read landed before that update and its lock
+            // acquisition landed after, it would overwrite pasteEntry()'s fresh
+            // m_lastSeen with a stale pre-paste value — and could then
+            // re-capture/re-promote whatever was on the clipboard before the
+            // paste, corrupting the MRU order. Reading here, atomically with
+            // the update, closes that race entirely. The cost is that a slow
+            // read (only a real concern for the Linux xclip-subprocess path,
+            // bounded to ~2s by its own timeout wrapper) can briefly delay
+            // other manager calls — an acceptable trade for correctness.
+            std::string current = readClipboard();
 
             // No change since last poll → nothing to do this round.
             // Empty reads (image/file/empty clipboard) are recorded as "seen"
@@ -328,13 +342,48 @@ bool ClipboardManager::pasteEntry(size_t index, std::string &outContent)
     std::lock_guard<std::mutex> lock(m_mutex);
     if (index >= m_history.size())
         return false;
-    outContent = m_history[index].content;
+
+    // Pasting/selecting an entry counts as "using" it, so promote it to the
+    // front (MRU position) — same as when a fresh duplicate copy is detected
+    // in start(). copyCount is deliberately NOT incremented here: it tracks
+    // how many times something was actually copied to the clipboard, and
+    // pasting an existing entry isn't a new copy event. The timestamp IS
+    // refreshed, consistent with how a duplicate fresh copy also refreshes it.
+    // std::deque's iterators are random-access, so begin()+index is valid.
+    ClipboardEntry entry = std::move(m_history[index]);
+    entry.timestamp = std::chrono::system_clock::now();
+    m_history.erase(m_history.begin() + static_cast<std::ptrdiff_t>(index));
+    m_history.push_front(std::move(entry));
+
+    outContent = m_history.front().content;
     writeClipboard(outContent);
 
     // Mark the text we just put on the clipboard as already-seen so the polling
-    // loop does NOT re-capture it as a new copy (which would bump its copyCount).
-    // Pasting from history should not count as a fresh clipboard event.
+    // loop does NOT re-capture it as a new copy (which would bump its copyCount
+    // a second time on top of the promotion above).
     m_lastSeen = outContent;
+    return true;
+}
+
+bool ClipboardManager::pasteEntryByContent(const std::string &content)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto it = std::find_if(m_history.begin(), m_history.end(),
+                           [&content](const ClipboardEntry &e)
+                           { return e.content == content; });
+    if (it == m_history.end())
+        return false;
+
+    // Same promote-to-front logic as pasteEntry() above, just found by
+    // content instead of position — see this method's header comment for why.
+    ClipboardEntry entry = std::move(*it);
+    entry.timestamp = std::chrono::system_clock::now();
+    m_history.erase(it);
+    m_history.push_front(std::move(entry));
+
+    writeClipboard(m_history.front().content);
+    m_lastSeen = m_history.front().content;
     return true;
 }
 

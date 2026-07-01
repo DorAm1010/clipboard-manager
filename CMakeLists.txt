@@ -21,7 +21,7 @@ set(CORE_SOURCES
 )
 
 if(APPLE)
-    list(APPEND CORE_SOURCES src/platform/clipboard_mac.mm src/platform/service_unix.cpp)
+    list(APPEND CORE_SOURCES src/platform/clipboard_mac.mm src/platform/service_unix.cpp src/platform/hotkey_mac.mm src/platform/window_mac.mm)
 elseif(WIN32)
     list(APPEND CORE_SOURCES src/platform/clipboard_win.cpp src/platform/service_win.cpp)
 elseif(UNIX)
@@ -35,9 +35,17 @@ target_include_directories(clipboard_core PUBLIC src src/platform)
 
 # Platform link dependencies — PUBLIC so consumers inherit them too.
 if(APPLE)
+    # Carbon: RegisterEventHotKey for the global popup hotkey (hotkey_mac.mm).
+    # See that file's header comment for why Carbon over the NSEvent global
+    # monitor (no Accessibility permission prompt needed).
+    # ApplicationServices: AXIsProcessTrustedWithOptions (Accessibility
+    # permission check/prompt) and CGEventPost (synthesized paste keystroke),
+    # both used by window_mac.mm's auto-paste-on-select.
     target_link_libraries(clipboard_core PUBLIC
         "-framework Cocoa"
         "-framework AppKit"
+        "-framework Carbon"
+        "-framework ApplicationServices"
     )
 elseif(WIN32)
     # user32: clipboard APIs.  ws2_32: Winsock, used by service_win.cpp for the

@@ -3,6 +3,14 @@
 #include "ansi.h"
 #include "platform/service.hpp"
 
+// Global hotkey listener for the popup window. Only implemented on macOS so
+// far (hotkey_mac.mm); every use of Hotkey:: below is therefore guarded with
+// #if defined(__APPLE__) so Windows/Linux builds never need to link symbols
+// that don't exist yet on those platforms.
+#if defined(__APPLE__)
+#include "platform/hotkey.h"
+#endif
+
 #include <CLI/CLI.hpp>
 #include <iostream>
 #include <iomanip>
@@ -35,7 +43,7 @@ static ClipboardManager *g_manager = nullptr;
 /**
  * @brief Signal handler for SIGINT (Ctrl+C) and SIGTERM.
  *
- * Two things have to happen for a clean shutdown:
+ * Three things have to happen for a clean shutdown:
  *   1. Stop the polling loop  — g_manager->stop() flips the running flag so the
  *      background monitor thread exits.
  *   2. Unblock the main thread — in interactive mode the main thread is parked
@@ -43,6 +51,10 @@ static ClipboardManager *g_manager = nullptr;
  *      interrupt (libc++/libstdc++ retry the read on EINTR). Closing stdin
  *      forces getline to hit end-of-file and return false, so the command loop
  *      breaks and the program shuts down just as if the user had typed `q`.
+ *   3. (macOS daemon mode only) Unblock the hotkey run loop — Hotkey::runEventLoop()
+ *      parks the main thread in CFRunLoopRun(); without this call that loop
+ *      would never notice the shutdown and the daemon would hang exactly like
+ *      the start/stop race fixed earlier in this project.
  *
  * In daemon mode stdin is already redirected to /dev/null, so closing it is
  * harmless there.
@@ -61,6 +73,10 @@ void handleSignal(int /*signum*/)
     {
         g_manager->stop();
     }
+
+#if defined(__APPLE__)
+    Hotkey::requestStop();
+#endif
 
     // Unblock a main thread that is waiting in std::getline by closing stdin.
 #ifdef _WIN32
@@ -450,6 +466,16 @@ void runAsDaemon()
     std::thread socketThread([&manager]()
                              { Service::createHistoryRequestSocket(manager); });
 
+#if defined(__APPLE__)
+    // STEP 1 of the popup-window work: register the global hotkey and block
+    // THIS (main) thread pumping its event loop, since Carbon/CoreFoundation
+    // hotkey delivery is tied to the thread that registered it. monitorThread
+    // and socketThread keep running exactly as before on their own threads.
+    // handleSignal() calls Hotkey::requestStop() to unblock this on shutdown.
+    // There is no popup window yet — runEventLoop()'s handler just logs.
+    Hotkey::runEventLoop(manager);
+#endif
+
     // Wait for the background thread to finish (it will run until stop() is called).
     if (monitorThread.joinable())
     {
@@ -486,10 +512,18 @@ int main(int argc, char *argv[])
     bool daemon_mode{false};
     bool stop_mode{false};
     bool history_mode{false};
+    bool foreground_mode{false};
 
     auto d_flag = app.add_flag("-d,--daemon", daemon_mode, "Run app as a background daemon");
     auto s_flag = app.add_flag("-k,--kill", stop_mode, "kill the running daemon process");
     auto history_flag = app.add_flag("-H,--history", history_mode, "Show the clipboard history and exit");
+    // Debug aid: run the daemon's logic (polling + IPC + hotkey) WITHOUT
+    // forking/detaching, so stdout/stderr stay attached to the terminal.
+    // Real `--daemon` redirects them to /dev/null (see Service::daemonize()),
+    // which makes it impossible to see log output like "[Hotkey] ... pressed!"
+    // while developing/testing. Only meaningful together with --daemon.
+    app.add_flag("--foreground", foreground_mode,
+                 "With --daemon: don't detach, keep logs on this terminal (for debugging)");
 
     // Production constraint: these three modes are mutually exclusive — you
     // cannot daemonize, kill, and dump history in the same invocation. CLI11's
@@ -515,7 +549,13 @@ int main(int argc, char *argv[])
     }
     if (daemon_mode)
     {
-        if (Service::daemonize() != 0)
+        if (foreground_mode)
+        {
+            std::cout << "[Foreground] Running daemon logic without detaching "
+                          "(Ctrl+C to stop; --kill will not find this process "
+                          "since no PID file is written in this mode).\n";
+        }
+        else if (Service::daemonize() != 0)
         {
             std::cerr << "Failed to enter background mode.\n";
             return 1;
