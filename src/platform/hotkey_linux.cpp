@@ -48,21 +48,39 @@
  * XStringToKeysym() — a general-purpose name-to-keysym lookup, so (unlike
  * Carbon's kVK_* constants) no hand-written per-character table is needed.
  *
- * STEP 1 of the Linux popup-window work: register the global hotkey and log
- * when it fires. There is no popup window yet (window_linux.cpp does not
- * exist until a later step), so the handler below only logs — mirroring how
- * hotkey_mac.mm's very first version worked before window_mac.mm existed.
+ * GTK integration: unlike a typical GTK application, this file does not call
+ * gtk_main(). It owns the single event loop for the whole daemon: a select()
+ * call that watches BOTH the raw X11 connection used for the hotkey grab
+ * above AND GDK's own X11 connection (opened by gtk_init_check() below), so
+ * it wakes up promptly for either a hotkey press or a popup-window UI event
+ * (click, keystroke), then pumps gtk_main_iteration() to let GTK actually
+ * process whatever's pending — see the loop in runEventLoop() below. This
+ * avoids pulling in GLib's g_io_add_watch main-loop machinery while still
+ * interleaving both event sources correctly on one thread.
+ *
+ * gtk_init_check() (not plain gtk_init()) is used deliberately: gtk_init()
+ * aborts the whole process if it can't open a display connection, which
+ * would break the graceful degradation this file already provides when no
+ * X11 is available at all (see the Wayland caveat above) — a real regression
+ * risk introduced by adding GTK. If GTK fails to initialize, gtkReady stays
+ * false, the hotkey grab and daemon keep working exactly as in STEP 1 (the
+ * handler just logs), and PopupWindow::toggle() is simply never called.
  */
 
 #include "hotkey.h"
+#include "window.h"
 #include "platform/paths.h"
 
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 
+#include <gtk/gtk.h>
+#include <gdk/gdkx.h>
+
 #include <sys/select.h>
 
 #include <atomic>
+#include <algorithm>
 #include <cctype>
 #include <iostream>
 #include <sstream>
@@ -192,8 +210,6 @@ namespace
 
 void Hotkey::runEventLoop(ClipboardManager &manager)
 {
-    (void)manager; // no popup window yet — see file header, STEP 1 just logs
-
     Display *display = XOpenDisplay(nullptr);
     if (!display)
     {
@@ -202,6 +218,23 @@ void Hotkey::runEventLoop(ClipboardManager &manager)
                      "global hotkeys need a compositor-level custom shortcut instead "
                      "(see the project docs). The daemon continues running without it.\n";
         return;
+    }
+
+    // gtk_init_check() opens GDK's own (separate) X11 connection and returns
+    // false instead of aborting if it can't — see the file header for why
+    // that matters here. A failure only disables the popup window; the raw
+    // hotkey grab below is unaffected.
+    int gtkArgc = 0;
+    bool gtkReady = gtk_init_check(&gtkArgc, nullptr);
+    if (!gtkReady)
+    {
+        std::cerr << "[Hotkey] GTK failed to initialize — the popup window will not be "
+                     "shown, but the hotkey will still be registered and logged. The "
+                     "daemon continues running.\n";
+    }
+    else
+    {
+        PopupWindow::ensureAccessibilityPermission();
     }
 
     const std::string kDefaultSpec = "cmd+shift+v";
@@ -261,6 +294,10 @@ void Hotkey::runEventLoop(ClipboardManager &manager)
               << std::flush;
 
     const int xfd = ConnectionNumber(display);
+    // GDK's own X11 connection (separate from the raw one above), watched
+    // too so popup-window UI events (clicks, keystrokes) get serviced
+    // promptly rather than waiting for the periodic timeout below.
+    const int gdkFd = gtkReady ? ConnectionNumber(GDK_DISPLAY_XDISPLAY(gdk_display_get_default())) : -1;
 
     while (!g_stopRequested.load())
     {
@@ -276,10 +313,21 @@ void Hotkey::runEventLoop(ClipboardManager &manager)
                 const unsigned int relevantMods = event.xkey.state & ~(LockMask | numLock);
                 if (event.xkey.keycode == keycode && relevantMods == parsed.modifiers)
                 {
-                    std::cout << "[Hotkey] " << spec
-                              << " pressed! (popup window not implemented yet)\n"
+                    std::cout << "[Hotkey] " << spec << " pressed! Toggling popup...\n"
                               << std::flush;
+                    if (gtkReady)
+                    {
+                        PopupWindow::toggle(manager);
+                    }
                 }
+            }
+        }
+
+        if (gtkReady)
+        {
+            while (gtk_events_pending())
+            {
+                gtk_main_iteration();
             }
         }
 
@@ -288,19 +336,25 @@ void Hotkey::runEventLoop(ClipboardManager &manager)
             break;
         }
 
-        // Block on the X11 connection's file descriptor with a timeout, so
+        // Block on the X11 connection file descriptor(s) with a timeout, so
         // this loop stays idle (no busy-polling) but still wakes up
-        // periodically to re-check g_stopRequested even with no key events
+        // periodically to re-check g_stopRequested even with no events
         // arriving — same "poll a flag on a short timer" idiom used
         // elsewhere in this project (service_unix.cpp's IPC accept loop,
         // hotkey_mac.mm's CFRunLoopTimer).
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(xfd, &fds);
+        int maxfd = xfd;
+        if (gdkFd >= 0)
+        {
+            FD_SET(gdkFd, &fds);
+            maxfd = std::max(maxfd, gdkFd);
+        }
         struct timeval tv{};
         tv.tv_sec = 0;
         tv.tv_usec = 200000; // 200ms
-        select(xfd + 1, &fds, nullptr, nullptr, &tv);
+        select(maxfd + 1, &fds, nullptr, nullptr, &tv);
     }
 
     for (unsigned int ignored : ignoredMasks)

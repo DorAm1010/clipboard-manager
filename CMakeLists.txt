@@ -25,7 +25,7 @@ if(APPLE)
 elseif(WIN32)
     list(APPEND CORE_SOURCES src/platform/clipboard_win.cpp src/platform/service_win.cpp)
 elseif(UNIX)
-    list(APPEND CORE_SOURCES src/platform/clipboard_linux.cpp src/platform/service_unix.cpp src/platform/hotkey_linux.cpp)
+    list(APPEND CORE_SOURCES src/platform/clipboard_linux.cpp src/platform/service_unix.cpp src/platform/hotkey_linux.cpp src/platform/window_linux.cpp)
 endif()
 
 add_library(clipboard_core STATIC ${CORE_SOURCES})
@@ -54,9 +54,26 @@ elseif(WIN32)
     # other toolchains (MinGW/GCC, Clang) silently ignore.
     target_link_libraries(clipboard_core PUBLIC user32 ws2_32)
 elseif(UNIX)
-    # Requires libx11-dev and libxfixes-dev on Debian/Ubuntu
+    # Requires libx11-dev, libxfixes-dev, libxtst-dev, libgtk-3-dev, and
+    # pkg-config on Debian/Ubuntu.
+    #
+    # X11/Xfixes: clipboard polling (clipboard_linux.cpp) and the global
+    # hotkey grab (hotkey_linux.cpp).
+    # Xtst: XTestFakeKeyEvent, the synthesized paste keystroke used by
+    # window_linux.cpp's auto-paste-on-select (the X11 analogue of macOS's
+    # CGEventPost — see that file's header comment for why no permission
+    # gate is needed here, unlike macOS's Accessibility prompt).
+    # GTK3: the popup window itself (window_linux.cpp) — see that file's
+    # header comment for why a toolkit is used here rather than raw Xlib
+    # widgets, unlike the "native per-OS" approach on macOS/Windows.
     find_package(X11 REQUIRED)
-    target_link_libraries(clipboard_core PUBLIC X11::X11 X11::Xfixes)
+    find_library(XTST_LIBRARY Xtst REQUIRED)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
+
+    target_link_libraries(clipboard_core PUBLIC X11::X11 X11::Xfixes ${XTST_LIBRARY} ${GTK3_LIBRARIES})
+    target_include_directories(clipboard_core PUBLIC ${GTK3_INCLUDE_DIRS})
+    target_compile_options(clipboard_core PUBLIC ${GTK3_CFLAGS_OTHER})
 endif()
 
 # ─── Compiler warnings (shared by all targets) ───────────────────────────────
