@@ -30,3 +30,28 @@ std::string getHistoryFilePath();
  * or getDataDir() + "clipboard-manager.pipe" (Windows)
  */
 std::string getSocketPath();
+
+/**
+ * @brief Return the full path to the user config file (currently just the
+ *        popup hotkey setting; extensible to more options later).
+ *
+ * Convenience wrapper: getDataDir() + "config.txt"
+ */
+std::string getConfigFilePath();
+
+/**
+ * @brief Read the configured global hotkey spec from the config file, e.g.
+ *        a line reading "hotkey=cmd+shift+v".
+ *
+ * This only reads the raw text of the "hotkey" key — it has no idea what a
+ * *valid* spec looks like, or how to turn it into a platform hotkey
+ * registration. Each platform's hotkey_*.{mm,cpp} file owns that parsing,
+ * since the modifier/keycode representations are entirely platform-specific
+ * (Carbon's cmdKey/kVK_* vs. Win32's MOD_CONTROL vs. X11's masks). This
+ * function is shared because the raw config-file format itself is the same
+ * everywhere.
+ *
+ * @param defaultSpec  Returned as-is if the config file doesn't exist, can't
+ *                     be read, or has no "hotkey" line.
+ */
+std::string getConfiguredHotkeySpec(const std::string &defaultSpec);

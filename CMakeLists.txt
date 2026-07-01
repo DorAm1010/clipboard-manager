@@ -109,3 +109,10 @@ add_test(NAME race_regression COMMAND race_regression_test)
 # Generous cap: the test completes in seconds when healthy; if it hangs (the
 # bug regressed) CTest kills it here and reports failure.
 set_tests_properties(race_regression PROPERTIES TIMEOUT 120)
+
+add_executable(paste_entry_by_content_test tests/paste_entry_by_content_test.cpp)
+target_link_libraries(paste_entry_by_content_test PRIVATE clipboard_core)
+target_compile_options(paste_entry_by_content_test PRIVATE ${PROJECT_WARNINGS})
+
+add_test(NAME paste_entry_by_content COMMAND paste_entry_by_content_test)
+set_tests_properties(paste_entry_by_content PROPERTIES TIMEOUT 30)

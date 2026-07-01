@@ -549,6 +549,19 @@ int main(int argc, char *argv[])
     }
     if (daemon_mode)
     {
+        // Refuse to start a second daemon. Two daemons sharing the same
+        // history file, hotkey registration, and PID file would corrupt all
+        // three (see the commit message / retrospective for the concrete
+        // failure modes). Checked unconditionally, including --foreground —
+        // that flag is a debugging convenience, not an exemption from the
+        // problems a second daemon would actually cause.
+        if (long existingPid = Service::isAlreadyRunning())
+        {
+            std::cerr << "clipboard-manager is already running (PID " << existingPid
+                      << "). Use --kill to stop it first.\n";
+            return 1;
+        }
+
         if (foreground_mode)
         {
             std::cout << "[Foreground] Running daemon logic without detaching "

@@ -30,6 +30,34 @@
 
 namespace fs = std::filesystem;
 
+long Service::isAlreadyRunning()
+{
+    std::ifstream pid_file(Service::PID_FILE_PATH);
+    if (!pid_file.is_open())
+    {
+        return 0; // no PID file at all — nothing running
+    }
+
+    pid_t pid;
+    pid_file >> pid;
+    pid_file.close();
+
+    if (pid <= 0)
+    {
+        return 0; // empty or malformed PID file
+    }
+
+    // kill(pid, 0) sends no actual signal — it just checks whether a process
+    // with this PID exists and we're allowed to signal it. See this
+    // function's header comment (service.hpp) for the PID-reuse caveat.
+    if (kill(pid, 0) == 0)
+    {
+        return static_cast<long>(pid);
+    }
+
+    return 0; // stale PID file — process no longer exists
+}
+
 int Service::daemonize()
 {
     openlog("clipboard_manager_daemon", LOG_PID, LOG_DAEMON);

@@ -108,6 +108,39 @@ namespace
     }
 }
 
+long Service::isAlreadyRunning()
+{
+    std::ifstream pid_file(Service::PID_FILE_PATH);
+    if (!pid_file.is_open())
+    {
+        return 0; // no PID file at all — nothing running
+    }
+
+    DWORD pid = 0;
+    pid_file >> pid;
+    pid_file.close();
+
+    if (pid == 0)
+    {
+        return 0; // empty or malformed PID file
+    }
+
+    // PROCESS_QUERY_LIMITED_INFORMATION is the minimal access right needed
+    // just to check whether the process is still alive and get its exit
+    // code — no termination rights requested here (that's --kill's job).
+    HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (hProcess == NULL)
+    {
+        return 0; // stale PID file — process no longer exists
+    }
+
+    DWORD exitCode = 0;
+    bool stillRunning = GetExitCodeProcess(hProcess, &exitCode) && exitCode == STILL_ACTIVE;
+    CloseHandle(hProcess);
+
+    return stillRunning ? static_cast<long>(pid) : 0;
+}
+
 int Service::daemonize()
 {
     // Detach from the parent console so the process keeps running without a
