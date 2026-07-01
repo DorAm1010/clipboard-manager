@@ -24,12 +24,30 @@
  *   on-disk artifact: when the process dies the OS frees the port immediately,
  *   so the whole orphan problem disappears.
  *
- *   The price is that any *local* user/process can connect to 127.0.0.1, whereas
- *   the AF_UNIX socket was chmod'd to 0600. We restore owner-only access with a
- *   capability token: the daemon writes a random token alongside the port into a
- *   file inside the data dir (which is already 0700), and only a client that
- *   presents the matching token is served. A local attacker who cannot read the
- *   owner's data dir therefore cannot read the clipboard history.
+ *   The price is that a bare TCP loopback socket has no access control beyond
+ *   "can you reach 127.0.0.1" — unlike the AF_UNIX socket (chmod'd to 0600),
+ *   ANY local process, even one running under a different Windows user account
+ *   (Fast User Switching, RDP, etc.), could port-scan 127.0.0.1 and read the
+ *   clipboard history with no other access required. We close that with a
+ *   capability token: the daemon writes a random, hex-encoded token (see
+ *   generateToken() below) alongside the port into a file in the data dir,
+ *   and only a client that presents the matching token is served. Sized for
+ *   this local, ephemeral use case, not as a cryptographic key — but it is
+ *   the actual security boundary here: unguessable regardless of the port, so
+ *   cross-account/network-level scanning is defeated outright.
+ *
+ *   What this does NOT protect against: another process running under the
+ *   SAME Windows user account reading the port file directly. We deliberately
+ *   do not harden that further (e.g. with a Windows ACL/DACL on the data dir —
+ *   see paths.cpp, which is honest that fs::permissions() is a best-effort
+ *   no-op on Windows). A same-user process already has a strictly easier path
+ *   to the same data: it can call GetClipboardData() directly (the same API
+ *   this app uses) for the live clipboard, or read history.txt for everything
+ *   persisted — both with identical, unenforced Windows permissions. Adding a
+ *   real ACL to just the port file would protect the smallest, most ephemeral
+ *   piece of this data while leaving the larger, persistent one (history.txt)
+ *   exactly as exposed, which isn't a coherent security posture. So: this is
+ *   an intentional scope boundary, not an oversight.
  *
  * Winsock requires WSAStartup()/WSACleanup() around all socket usage, uses
  * SOCKET/INVALID_SOCKET instead of int/-1, and closesocket() instead of close().
@@ -63,9 +81,10 @@
 
 namespace
 {
-    // Where the daemon advertises its loopback port + access token. Lives in the
-    // data dir (0700), so only the owner can read the token. Replaces the AF_UNIX
-    // socket file that the previous implementation used.
+    // Where the daemon advertises its loopback port + access token. Replaces
+    // the AF_UNIX socket file used previously. The token itself (not this
+    // file's permissions, which are not hardened on Windows — see the file
+    // header comment) is what keeps other-account/network access out.
     std::string portFilePath()
     {
         return getDataDir() + "clipboard-manager.port";
