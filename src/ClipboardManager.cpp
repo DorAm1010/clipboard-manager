@@ -12,7 +12,7 @@
 
 // ─── File-format helpers ──────────────────────────────────────────────────────
 //
-// The on-disk / on-wire format is one entry per line: TIMESTAMP|content|COUNT.
+// The on-disk / on-wire format is one entry per line: TIMESTAMP|content.
 // Because the line is split on '\n', any newline inside the copied text would
 // corrupt the format (one entry would span several lines). To avoid that we
 // escape newlines to the two-character sequence "\n" on the way out, and undo
@@ -108,7 +108,6 @@ void ClipboardManager::saveHistory(const std::string &path) const
     {
         outFile << std::chrono::system_clock::to_time_t(entry.timestamp)
                 << "|" << escapeNewlines(entry.content)
-                << "|" << entry.copyCount
                 << "\n";
     }
 
@@ -133,8 +132,7 @@ std::string ClipboardManager::serializeHistory() const
     for (const auto &entry : m_history)
     {
         oss << std::chrono::system_clock::to_time_t(entry.timestamp)
-            << "|" << escapeNewlines(entry.content)
-            << "|" << entry.copyCount << "\n";
+            << "|" << escapeNewlines(entry.content) << "\n";
     }
     return oss.str();
 }
@@ -151,32 +149,25 @@ void ClipboardManager::loadHistory(const std::string &path)
     std::string line;
     while (std::getline(inFile, line))
     {
-        // Format: TIMESTAMP|content|COUNT. The content may itself contain '|'
-        // characters, so we cannot naively split on every '|'. Instead we split
-        // on the FIRST and LAST '|': timestamp is before the first, count is
-        // after the last, and everything in between is the (escaped) content.
-        // timestamp and count are always plain integers, so they never contain
-        // a '|' — this makes the first/last delimiters unambiguous.
+        // Format: TIMESTAMP|content. The content may itself contain '|'
+        // characters, so we split only on the FIRST '|': timestamp is
+        // everything before it (always a plain integer, so it never contains
+        // a '|' itself, making this delimiter unambiguous), and content is
+        // everything after, however many further '|' characters it contains.
         size_t firstPipe = line.find('|');
-        size_t lastPipe = line.rfind('|');
-
-        // Need at least two distinct '|' for a well-formed record.
-        if (firstPipe == std::string::npos || lastPipe == firstPipe)
+        if (firstPipe == std::string::npos)
             continue;
 
         std::string timestampStr = line.substr(0, firstPipe);
-        std::string content = line.substr(firstPipe + 1, lastPipe - firstPipe - 1);
-        std::string copyCountStr = line.substr(lastPipe + 1);
+        std::string content = line.substr(firstPipe + 1);
 
         // A corrupt or partially-written line should be skipped, not crash the
-        // whole program — std::stoll/std::stoi throw on non-numeric input.
+        // whole program — std::stoll throws on non-numeric input.
         try
         {
             std::time_t timestamp = std::stoll(timestampStr);
-            int copyCount = std::stoi(copyCountStr);
             newHistory.emplace_back(unescapeNewlines(content));
             newHistory.back().timestamp = std::chrono::system_clock::from_time_t(timestamp);
-            newHistory.back().copyCount = copyCount;
         }
         catch (const std::exception &)
         {
@@ -291,10 +282,9 @@ void ClipboardManager::start()
 
                     if (it != m_history.end())
                     {
-                        // Already present: promote it to the front (most recent),
-                        // bump its copy count and refresh its timestamp.
+                        // Already present: promote it to the front (most
+                        // recent) and refresh its timestamp.
                         ClipboardEntry promoted = std::move(*it);
-                        promoted.copyCount++;
                         promoted.timestamp = std::chrono::system_clock::now();
                         m_history.erase(it);
                         m_history.push_front(std::move(promoted));
@@ -345,10 +335,8 @@ bool ClipboardManager::pasteEntry(size_t index, std::string &outContent)
 
     // Pasting/selecting an entry counts as "using" it, so promote it to the
     // front (MRU position) — same as when a fresh duplicate copy is detected
-    // in start(). copyCount is deliberately NOT incremented here: it tracks
-    // how many times something was actually copied to the clipboard, and
-    // pasting an existing entry isn't a new copy event. The timestamp IS
-    // refreshed, consistent with how a duplicate fresh copy also refreshes it.
+    // in start(). The timestamp is refreshed, consistent with how a
+    // duplicate fresh copy also refreshes it.
     // std::deque's iterators are random-access, so begin()+index is valid.
     ClipboardEntry entry = std::move(m_history[index]);
     entry.timestamp = std::chrono::system_clock::now();
@@ -359,8 +347,8 @@ bool ClipboardManager::pasteEntry(size_t index, std::string &outContent)
     writeClipboard(outContent);
 
     // Mark the text we just put on the clipboard as already-seen so the polling
-    // loop does NOT re-capture it as a new copy (which would bump its copyCount
-    // a second time on top of the promotion above).
+    // loop does NOT re-capture it as a duplicate "new" entry on top of the
+    // promotion above.
     m_lastSeen = outContent;
     return true;
 }

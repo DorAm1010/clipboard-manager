@@ -83,7 +83,6 @@
 #include <X11/keysym.h>
 
 #include <algorithm>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -148,14 +147,7 @@ namespace
         {
             collapsed += (c == '\n' || c == '\r') ? ' ' : c;
         }
-
-        std::ostringstream oss;
-        oss << collapsed;
-        if (entry.copyCount > 1)
-        {
-            oss << "   (x" << entry.copyCount << ")";
-        }
-        return oss.str();
+        return collapsed;
     }
 
     // Sends a system-wide Ctrl+V via XTestFakeKeyEvent, as if the user had

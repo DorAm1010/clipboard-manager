@@ -92,7 +92,6 @@
 #include <ApplicationServices/ApplicationServices.h> // AXIsProcessTrustedWithOptions, CGEventPost
 #include <Carbon/Carbon.h>                           // kVK_Return / kVK_ANSI_KeypadEnter / kVK_ANSI_V / kVK_LeftArrow / kVK_RightArrow
 #include <algorithm>
-#include <sstream>
 #include <string>
 
 // Forward-declared here so the C++ helpers below (which reference these
@@ -154,14 +153,7 @@ namespace
             collapsed += (c == '\n' || c == '\r') ? ' ' : c;
         }
 
-        std::ostringstream oss;
-        oss << collapsed;
-        if (entry.copyCount > 1)
-        {
-            oss << "   (x" << entry.copyCount << ")";
-        }
-
-        return [NSString stringWithUTF8String:oss.str().c_str()];
+        return [NSString stringWithUTF8String:collapsed.c_str()];
     }
 
     // Forward declaration; defined after getOrCreatePanel() below, but

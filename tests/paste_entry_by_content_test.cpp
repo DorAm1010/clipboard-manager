@@ -4,9 +4,8 @@
 // the GUI popup's search feature needed content-based (not index-based)
 // entry activation, since search results have no direct position in the
 // full history. Verifies:
-//   1. Pasting an entry not at the front promotes it to the front (MRU),
-//      refreshes its timestamp, and does NOT bump copyCount (pasting an
-//      existing entry isn't a fresh copy event).
+//   1. Pasting an entry not at the front promotes it to the front (MRU)
+//      and refreshes its timestamp.
 //   2. Pasting the same (now-front) entry again is a harmless no-op reorder.
 //   3. Pasting content that doesn't exist in history fails cleanly and
 //      leaves history completely unchanged.
@@ -50,11 +49,11 @@ namespace
     void writeTempHistoryFile(const std::string &path)
     {
         std::ofstream out(path);
-        // TIMESTAMP|content|copyCount, one entry per line, front (newest)
-        // first — matches the on-disk format documented in ClipboardManager.cpp.
-        out << "1700000003|charlie|1\n";
-        out << "1700000002|bravo|2\n";
-        out << "1700000001|alpha|1\n";
+        // TIMESTAMP|content, one entry per line, front (newest) first —
+        // matches the on-disk format documented in ClipboardManager.cpp.
+        out << "1700000003|charlie\n";
+        out << "1700000002|bravo\n";
+        out << "1700000001|alpha\n";
     }
 }
 
@@ -87,8 +86,8 @@ int main()
         }
     }
 
-    // Pasting an entry NOT at the front should promote it to the front,
-    // refresh its timestamp, and leave copyCount unchanged.
+    // Pasting an entry NOT at the front should promote it to the front and
+    // refresh its timestamp.
     {
         bool ok = manager.pasteEntryByContent("alpha");
         check(ok, "pasteEntryByContent(\"alpha\") succeeds");
@@ -98,14 +97,13 @@ int main()
         if (entries.size() == 3)
         {
             check(entries[0].content == "alpha", "alpha promoted to front");
-            check(entries[0].copyCount == 1, "alpha's copyCount unchanged by paste (was 1)");
             check(entries[1].content == "charlie", "charlie now second");
             check(entries[2].content == "bravo", "bravo now third");
         }
     }
 
     // Pasting the same (now-front) entry again should be a harmless no-op —
-    // still at the front, copyCount still untouched.
+    // still at the front.
     {
         bool ok = manager.pasteEntryByContent("alpha");
         check(ok, "pasting the already-front entry again still succeeds");
@@ -114,7 +112,6 @@ int main()
         if (!entries.empty())
         {
             check(entries[0].content == "alpha", "alpha stays at front on repeat paste");
-            check(entries[0].copyCount == 1, "repeat paste still doesn't bump copyCount");
         }
     }
 

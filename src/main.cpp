@@ -217,7 +217,7 @@ namespace
     // Build a horizontal rule like "├────┼──────┼────┤". Each column reserves
     // width+2 dashes to account for the single space of padding on each side.
     std::string hrule(const char *left, const char *mid, const char *right,
-                      int w1, int w2, int w3, int w4)
+                      int w1, int w2, int w3)
     {
         auto seg = [](int w)
         {
@@ -226,12 +226,12 @@ namespace
                 s += "─";
             return s;
         };
-        return std::string(left) + seg(w1) + mid + seg(w2) + mid + seg(w3) + mid + seg(w4) + right;
+        return std::string(left) + seg(w1) + mid + seg(w2) + mid + seg(w3) + right;
     }
 }
 
 /**
- * @brief Render a list of entries as a box-drawn table: #, Time, Content, Count.
+ * @brief Render a list of entries as a box-drawn table: #, Time, Content.
  *
  * @param heading  A short title printed above the table.
  * @param entries  The entries to display (already a stable snapshot).
@@ -244,36 +244,29 @@ void printTable(const std::string &heading, const std::vector<ClipboardEntry> &e
     const int timeW = 8; // "HH:MM:SS"
     const int contentW = 50;
 
-    int maxCount = 1;
-    for (const auto &e : entries)
-        maxCount = std::max(maxCount, e.copyCount);
-    const int countW = std::max<int>(5, static_cast<int>(std::to_string(maxCount).size())); // "Count" is 5 wide
-
     std::cout << "\n"
               << heading << "\n";
-    std::cout << hrule("┌", "┬", "┐", idxW, timeW, contentW, countW) << "\n";
+    std::cout << hrule("┌", "┬", "┐", idxW, timeW, contentW) << "\n";
     std::cout << "│ " << padRight("#", idxW)
               << " │ " << padRight("Time", timeW)
-              << " │ " << padRight("Content", contentW)
-              << " │ " << padRight("Count", countW) << " │\n";
-    std::cout << hrule("├", "┼", "┤", idxW, timeW, contentW, countW) << "\n";
+              << " │ " << padRight("Content", contentW) << " │\n";
+    std::cout << hrule("├", "┼", "┤", idxW, timeW, contentW) << "\n";
 
     for (size_t i = 0; i < entries.size(); ++i)
     {
         const std::string idx = std::to_string(i + 1);
         const std::string tm = formatTime(entries[i].timestamp);
         const std::string content = truncate(entries[i].content, contentW);
-        const std::string cnt = std::to_string(entries[i].copyCount);
 
         // Color is applied around the already-padded content so the (invisible)
         // escape codes don't throw off the column alignment.
         std::cout << "│ " << padLeft(idx, idxW)
                   << " │ " << padRight(tm, timeW)
                   << " │ " << ansi::entryColor(i) << padRight(content, contentW) << ansi::reset()
-                  << " │ " << padLeft(cnt, countW) << " │\n";
+                  << " │\n";
     }
 
-    std::cout << hrule("└", "┴", "┘", idxW, timeW, contentW, countW) << "\n\n";
+    std::cout << hrule("└", "┴", "┘", idxW, timeW, contentW) << "\n\n";
 }
 
 /**

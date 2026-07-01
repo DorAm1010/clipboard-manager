@@ -30,8 +30,6 @@ struct ClipboardEntry
     /// without losing precision.
     std::chrono::system_clock::time_point timestamp;
 
-    int copyCount = 1; // Number of times this entry has been copied to the clipboard
-
     /**
      * @brief Construct an entry from a text string, stamping the current time.
      *
