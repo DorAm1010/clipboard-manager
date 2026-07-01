@@ -1,0 +1,45 @@
+# Dockerfile.linux-gui — an interactive Linux desktop for MANUALLY testing the
+# popup window (hotkey, search, pagination, click-to-paste, etc.) with your
+# own eyes and keyboard, as opposed to Dockerfile.linux-test's headless,
+# script-driven verification (Xvfb + xdotool + scrot, no human involved).
+#
+# This runs a virtual X server (Xvfb) + a minimal window manager (openbox) +
+# a terminal (xterm, so you have somewhere to type/copy text from) + a VNC
+# server (x11vnc), so you can connect with any VNC client — including
+# macOS's built-in Screen Sharing app, no extra software needed — and see/
+# use the desktop as if it were a real machine.
+#
+# Build:
+#   docker build -f docker/Dockerfile.linux-gui -t clipboard-manager-linux-gui .
+#
+# Run (maps the VNC port to your host):
+#   docker run --rm -p 5900:5900 --name cbm-gui clipboard-manager-linux-gui
+#
+# Connect (macOS, no extra software):
+#   open vnc://localhost:5900
+#
+# Stop:
+#   docker stop cbm-gui
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    build-essential cmake git pkg-config \
+    libx11-dev libxfixes-dev libxtst-dev libgtk-3-dev \
+    xclip xvfb xdotool openbox xterm x11vnc \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY . .
+
+RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --parallel
+
+COPY docker/start-gui-session.sh /usr/local/bin/start-gui-session.sh
+RUN chmod +x /usr/local/bin/start-gui-session.sh
+
+EXPOSE 5900
+
+CMD ["/usr/local/bin/start-gui-session.sh"]
